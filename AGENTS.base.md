@@ -1,0 +1,266 @@
+# AGENTS.base.md — Universal Agent Instructions
+
+This document defines the working principles, safety rules, and code practices that apply across
+all Python projects in the `lunk` workspace. Project-specific `AGENTS.project.md` files build on
+this foundation and may add, refine, or override anything here.
+
+---
+
+## Purpose
+
+Agent instructions exist to:
+
+- Prevent **silent failures** — the worst outcome in this workspace (background processes that die
+  with no log, no error visible to the user)
+- Standardise Python environment, import discipline, and deployment patterns
+- Catch mistakes before they reach production
+- Make code reviewable and maintainable across a family of related repos
+
+---
+
+## General Working Style
+
+- Implement changes rather than suggesting them, unless explicitly asked to discuss first.
+- Read files before modifying them. Understand existing code before changing it.
+- Don't add features, refactor, or make "improvements" beyond what was asked.
+- Don't add docstrings, comments, or type annotations to code you didn't change.
+- Don't add error handling for scenarios that can't happen. Only validate at system boundaries.
+- Don't create helpers or abstractions for one-time operations.
+- Keep answers short. Expand only for complex work or when asked.
+
+### REPL-style vs CLI-style development
+
+Some repos use interactive REPL-style development where modules are run directly from a command
+prompt with hardcoded parameters toggled before each run, rather than CLI args:
+
+```python
+import runpy ; temp = runpy._run_module_as_main("mymodule")
+```
+
+If the repo uses this pattern:
+
+- Always include the `runpy` invocation in the module docstring.
+- Hardcode desired values directly in `main()` — do not refactor away these hardcoded overrides.
+- Do not suggest arg-parsing alternatives unless explicitly requested.
+
+Your `AGENTS.project.md` will clarify which pattern applies.
+
+---
+
+## Python Environment
+
+**Always use this interpreter** (never bare `python`, `python3`, or alternatives unless told otherwise):
+
+```
+C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe
+```
+
+---
+
+## Code Style Preferences
+
+### Syntax-check after every Python edit
+
+After editing **any** `.py` file, immediately verify it parses cleanly before committing:
+
+```powershell
+& "C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe" -m py_compile path\to\edited_file.py
+```
+
+A `SyntaxError` or `IndentationError` at module level causes a **completely silent crash** when the
+process runs in a background window (VBA-spawned, `subprocess.Popen`, Cloud Run). stderr is
+invisible, the process dies before any log call, and the only symptom the user sees is a timeout.
+
+### Module-level imports: stdlib only
+
+Only stdlib imports at module level. No exceptions — not `versholn`, not packages from
+`requirements.txt`, not cross-repo deps.
+
+**Why:** Bootstrap is skipped during local dev; module-level imports of unlisted packages crash the
+dev server invisibly. Dep declarations must be visible to automated scanning tools.
+
+**Exception:** Your `AGENTS.project.md` may list exceptions for repos without a bootstrap layer.
+
+Cross-repo symbols must be loaded via `versholn.importx()` inside functions:
+
+```python
+from utils import get_versholn  # relative import — stdlib-safe
+
+def my_function():
+    get_versholn(globals())  # injects versholn into this module's globals (idempotent)
+    CDPClient = versholn.importx("chrome_tools.CDPClient")
+    ...
+```
+
+### `safe_local_imports` — blast-radius limitation
+
+Any Python file with an `if __name__ == "__main__":` block that imports non-stdlib modules must
+centralise those imports in a function named `safe_local_imports`:
+
+```python
+def safe_local_imports(g: dict) -> None:
+    """Load all non-stdlib local-module imports into *g* (pass globals()).
+
+    Centralising imports here limits blast radius: if any import raises
+    (e.g. a SyntaxError or ImportError buried in an imported module), the
+    exception is caught, logged with a full traceback, then re-raised —
+    so the log always contains a FATAL line before the process dies.
+
+    Call once at the top of `if __name__ == "__main__":`, before calling main():
+        safe_local_imports(globals())
+    """
+    try:
+        from mymodule import MyClass         # <- replace with this file's actual imports
+        g["MyClass"] = MyClass
+        # ... all other non-stdlib imports ...
+    except Exception:
+        import traceback as _tb
+        _log(f"FATAL: safe_local_imports failed:\n{_tb.format_exc()}")
+        raise
+
+
+if __name__ == "__main__":
+    safe_local_imports(globals())
+    main()   # MyClass etc. now available as module globals
+```
+
+**Scope:**
+- Same-repo local imports only
+- Cross-repo symbols loaded via `versholn.importx()` are already wrapped — do not duplicate them here
+- stdlib imports do not belong here
+
+**Why:** A `SyntaxError` buried inside an imported module kills the process before `_log` is even
+defined. Without `safe_local_imports`, a hidden-window process exits with no log entry. With it,
+there is always at least one `FATAL` line in the log.
+
+---
+
+## Safety and Destructive Actions
+
+### Process visibility: no hidden windows
+
+Never start Python, Excel, or Chrome processes invisibly:
+
+- VBA `Shell` calls must use `vbNormalFocus` (not `vbHide` or `vbMinimizedNoFocus`)
+- Excel COM: `Application.Visible = True` always (never `False`)
+- Chrome: `headless=False` always
+- `subprocess` must never use flags that hide a window
+
+**Why:** Hidden modal dialogs silently block processes with no way for the user to diagnose the hang.
+
+### Error handling: no silent failures
+
+Silent, abrupt failures are the worst possible outcome. When Python is launched by VBA via `Shell`,
+it runs in a window the user cannot see. Any unhandled exception writes to stderr — which is
+invisible — and the process dies. The log gets nothing. The user sees a timeout.
+
+**Rules:**
+
+1. Every entry-point `main()` must have a last-resort `except` that logs the full traceback:
+
+   ```python
+   if __name__ == "__main__":
+       try:
+           raise SystemExit(main())
+       except SystemExit:
+           raise
+       except Exception:
+           import traceback
+           _log(f"FATAL unhandled exception:\n{traceback.format_exc()}")
+           raise
+   ```
+
+2. Startup dependency loads must be wrapped with a logged message:
+
+   ```python
+   try:
+       SomeClass = versholn.importx("some_tools.SomeClass")
+   except Exception:
+       _log(f"FATAL: failed to load dependencies:\n{traceback.format_exc()}")
+       return 1
+   ```
+
+3. Never use bare `except: pass` or `except: return {}`. Always log before swallowing.
+
+4. Log on entry and exit of every long operation. If a process logged `starting X` but never
+   `X complete` or `X FAILED`, the developer knows exactly where it died.
+
+5. Server startup must log the port it bound to *after* the socket is bound.
+
+### Destructive actions require confirmation
+
+Before deleting files, dropping tables, running `rm -rf`, force-pushing, resetting git history,
+amending published commits, or any other hard-to-reverse operation: **ask the user first**.
+
+---
+
+## Testing and Verification
+
+### Pre-commit checklist
+
+Before committing any Python changes:
+
+1. **Syntax-check** every edited `.py` file with `py_compile`
+2. **Manual test** the affected code path locally if possible
+3. If the repo defines a test suite, run it — your `AGENTS.project.md` will specify how
+
+### When unsure about a change
+
+1. Check `AGENTS.project.md` first — it may already address the situation.
+2. Look for existing patterns in the codebase: how do other files handle similar problems?
+3. If still uncertain, ask before committing rather than guessing.
+
+---
+
+## Git and Repository Hygiene
+
+### Branch model
+
+Most `lunk` repos use a simple model:
+
+- **`main`** — production/release branch. Never commit to it directly.
+- Work happens on release branches (e.g. `0.1`, `0.2`) — see `AGENTS.project.md` for the
+  specific branching strategy.
+
+### Commit hygiene
+
+1. Syntax-check Python files before committing.
+2. Write a clear, concise commit message.
+3. Don't combine unrelated changes in a single commit.
+4. Don't push automatically after committing — let the user decide when to push.
+
+### Multi-repo sibling structure
+
+Several projects depend on sibling repos cloned into the same parent directory:
+
+```
+<parent>\
+  this_repo\
+  versholn\            (bootstrap + import utilities)
+  project_tools\       (singleton, project state)
+  chrome_tools\        (Chrome launcher + CDP client)
+  excel_tools\         (Excel COM driver + VBA injection)
+  local_server_tools\  (HTTP command server)
+  nielsoln_agent_standards\  (agent instruction standards)
+```
+
+Machine-specific paths live in `locals.txt` (gitignored). Copy `locals.txt.example` → `locals.txt`
+and fill in your paths before running any local commands. Never commit `locals.txt`.
+
+---
+
+## Documentation Standards
+
+- Explain *why* a non-obvious design choice was made — not what the code does.
+- Mark temporary debug code with `# DBG:` and remove before committing.
+- If the repo uses REPL-style development, include the `runpy` invocation in module docstrings.
+- Keep `AGENTS.project.md` up to date as conventions evolve.
+
+---
+
+## When Unsure
+
+1. **Read `AGENTS.project.md`** — it builds on this base and adds project-specific rules.
+2. **Read `AGENTS.local.md`** if it exists — it overrides everything.
+3. **Look for existing patterns** in the codebase before inventing new ones.
+4. **Ask before committing** if genuinely uncertain — better to clarify than introduce a silent failure.
