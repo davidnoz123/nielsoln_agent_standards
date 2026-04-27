@@ -216,11 +216,30 @@ Before committing any Python changes:
 
 ### Branch model
 
-Most `lunk` repos use a simple model:
+All `lunk` repos use the same model:
 
-- **`main`** — production/release branch. Never commit to it directly.
-- Work happens on release branches (e.g. `0.1`, `0.2`) — see `AGENTS.project.md` for the
-  specific branching strategy.
+- **`main`** — production/stable branch. **Never commit directly to `main`.**
+- All work happens on a release branch named `<major>.<minor>` (e.g. `0.1`, `0.2`).
+- When a release is ready, the release branch is merged into `main`.
+
+### Versioning — virtual tags
+
+Versions are **derived from git state by versholn** — they are never applied manually as git tags.
+
+The version string is: **`<major>.<minor>.<patch>`**
+
+| Component | Source |
+|---|---|
+| `major.minor` | The name of the current branch (must match `\d+\.\d+`) |
+| `patch` | First-parent commit count on that branch |
+| SHA | Always authoritative — append `.{shortsha}` when precision matters (e.g. `0.1.12.a3f9c21`) |
+
+**Rules for a clean virtual tag:**
+- Branch must be named `<major>.<minor>`
+- HEAD must match the upstream tip (no local-only commits when publishing)
+- Repo must be clean (no uncommitted changes)
+
+**Never** create git tags manually. **Never** embed version strings in source files — always derive at runtime via versholn.
 
 ### Commit hygiene
 
