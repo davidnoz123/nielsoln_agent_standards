@@ -20,6 +20,8 @@ import sys
 import os
 import json
 import argparse
+import urllib.request
+import urllib.error
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -374,6 +376,78 @@ def check_on_latest_branch(repo: Path) -> CheckResult:
     )
 
 
+def check_github_visibility(repo: Path, github_token: str) -> CheckResult:
+    """
+    Warn if the GitHub repo is public. All lunk repos should be private by default.
+    Skipped gracefully if no GITHUB_TOKEN is available or the remote is not GitHub.
+    """
+    import re
+    import subprocess
+
+    if not github_token:
+        return CheckResult(
+            name="GitHub visibility (no GITHUB_TOKEN in locals.txt — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    try:
+        remote_url = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo, capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+    except Exception:
+        remote_url = ""
+
+    # Parse owner/repo from https or ssh GitHub URLs
+    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(\.git)?$", remote_url)
+    if not m:
+        return CheckResult(
+            name="GitHub visibility (not a GitHub remote — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    owner, repo_name = m.group(1), m.group(2)
+    api_url = f"https://api.github.com/repos/{owner}/{repo_name}"
+
+    try:
+        req = urllib.request.Request(
+            api_url,
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        is_private = data.get("private", True)
+    except urllib.error.HTTPError as e:
+        return CheckResult(
+            name=f"GitHub visibility (API error {e.code} — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+    except Exception:
+        return CheckResult(
+            name="GitHub visibility (API call failed — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    return CheckResult(
+        name=f"GitHub visibility ({owner}/{repo_name}: {'private' if is_private else 'PUBLIC'})",
+        passed=is_private,
+        warning=True,
+        why=(
+            "All lunk repos should be private by default. A public repo exposes "
+            "code, commit history, and branch names to anyone on the internet."
+        ),
+        fix=(
+            f"Go to https://github.com/{owner}/{repo_name}/settings \u2192 "
+            "'Danger Zone' \u2192 'Change repository visibility' \u2192 Private.\n"
+            "Or if this repo is intentionally public (e.g. open-source), ignore this warning."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry — ordered list of all checks to run
 # ---------------------------------------------------------------------------
@@ -398,6 +472,7 @@ ALL_CHECKS = [
     check_branch_not_main,
     check_remote_tracking,
     check_on_latest_branch,
+    check_github_visibility,
 ]
 
 
@@ -405,12 +480,15 @@ ALL_CHECKS = [
 # Runner
 # ---------------------------------------------------------------------------
 
-def check_repo(repo_path: Path, is_self: bool = False) -> RepoReport:
+def check_repo(repo_path: Path, is_self: bool = False, github_token: str = "") -> RepoReport:
     report = RepoReport(repo_name=repo_path.name, repo_path=repo_path)
     for check_fn in ALL_CHECKS:
         if is_self and check_fn in AGENTS_INFRA_CHECKS:
             continue  # standards repo is exempt from AGENTS infrastructure checks
-        report.checks.append(check_fn(repo_path))
+        if check_fn is check_github_visibility:
+            report.checks.append(check_github_visibility(repo_path, github_token))
+        else:
+            report.checks.append(check_fn(repo_path))
     return report
 
 
@@ -518,10 +596,12 @@ def main():
             if p.is_dir() and (p / ".git").exists()
         )
 
+    github_token = locals_data.get("GITHUB_TOKEN", "")
+
     reports = []
     for target in targets:
         is_self = target.resolve() == self_repo
-        report = check_repo(target, is_self=is_self)
+        report = check_repo(target, is_self=is_self, github_token=github_token)
         print_report(report, verbose=args.verbose)
         reports.append(report)
 
