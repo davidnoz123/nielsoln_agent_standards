@@ -268,6 +268,151 @@ and fill in your paths before running any local commands. Never commit `locals.t
 
 ---
 
+## Workspace Branch State
+
+The versholn virtual-tag system requires all repos to be on a named `<N>.<M>` release branch —
+never `main`. `main` is the stable/production branch; active development always happens on a
+release branch. Getting this wrong silently breaks versioning for every repo in the workspace.
+
+### Rules
+
+- **Never develop on `main`.** After cloning a repo, always checkout the latest `<N>.<M>` branch
+  before making any changes.
+- **Agents must warn** whenever `versholn.load_repo().branch == "main"` and a release branch
+  exists. Surface this as a clear warning before proceeding with any code changes.
+- **Fresh machine setup:** run `OPERATION = "align_latest"` in `versholn.py` (REPL) to checkout
+  the latest `<N>.<M>` branch in every sibling repo automatically.
+- **Old project revival:** if resuming work on a repo that depended on older branch versions of
+  its siblings, run `OPERATION = "align_to_compat"` with `TARGET_REPO` set to the repo whose
+  `compat.json` defines the required dependency versions.
+
+### Running workspace alignment (three tiers)
+
+**Tier A — versholn REPL (primary):**
+
+```python
+import runpy ; temp = runpy._run_module_as_main("versholn")
+```
+
+Toggle `OPERATION` in `main()` before running:
+
+| OPERATION | Effect |
+|---|---|
+| `"status"` | Print branch/SHA for every sibling repo; flag any on `main` |
+| `"align_latest"` | Checkout highest `<N>.<M>` branch in every sibling repo |
+| `"align_to_compat"` | Align to branches matching `TARGET_REPO`'s `compat.json` |
+
+Key params to set in `main()`:
+
+```python
+OPERATION        = "align_to_compat"
+TARGET_REPO      = "video_annotation"   # whose compat.json to read
+BRANCH_OVERRIDES = {"chrome_tools": "0.1"}  # wins over compat.json
+DIRTY_POLICY     = "skip"              # "skip" | "stash_pop" | "stash_only"
+DIRTY_OVERRIDES  = {}                  # per-repo override of DIRTY_POLICY
+```
+
+**Tier B — from a repo's own admin script (when it has one):**
+
+Any repo with a hub.py / tools.py may call `versholn.align_workspace()` directly inside a
+function (standard importx pattern, no module-level import):
+
+```python
+def op_align_workspace():
+    get_versholn(globals())
+    results = versholn.align_workspace(
+        root,
+        overrides=BRANCH_OVERRIDES,
+        dirty_policy=DIRTY_POLICY,
+    )
+    for r in results:
+        _log(f"  {r['repo']:<30} {r['status']}  {r.get('branch', '')}  {r.get('note', '')}")
+    return 0
+```
+
+**Tier C — inline one-off (no admin script):**
+
+```python
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "versholn"))
+import versholn
+results = versholn.align_workspace(os.path.join(os.path.dirname(__file__), ".."))
+for r in results:
+    print(r["repo"], r["status"], r.get("branch", ""), r.get("note", ""))
+```
+
+### Dirty-repo policy
+
+When `align_workspace()` encounters a repo with uncommitted changes:
+
+| `dirty_policy` | Behaviour |
+|---|---|
+| `"skip"` | Log a warning, leave the repo unchanged (default — always safe) |
+| `"save_branch"` | Commit WIP state to `wip/versholn-align/{original_branch}/{timestamp}`, then checkout target. Named, permanent, recoverable. Find with `git branch \| grep wip/versholn-align`. |
+
+> **Why not `git stash`?** Stash is an anonymous LIFO stack. Multiple alignment runs
+> stack entries silently; `stash pop` restores the wrong thing if pre-existing stashes
+> exist; a mid-run crash leaves orphaned entries across many repos with no record of
+> which ones versholn created. `save_branch` is always safe to re-run and always
+> recoverable.
+
+Per-repo overrides go in `DIRTY_OVERRIDES` (in `main()`) or in `align.json` at the repo root:
+
+```json
+{"dirty_overrides": {"chrome_tools": "stash_pop"}}
+```
+
+`align.json` is committed — it's a repo-level declaration of how sensitive that repo is about
+its dependencies' dirty state. `DIRTY_OVERRIDES` passed to `align_workspace()` wins over
+`align.json`.
+
+> **Future:** per-pair `{(referrer, referee): policy}` overrides are planned but not yet
+> implemented. Use `dirty_overrides` per-repo as the current equivalent.
+
+---
+
+## Combination Pattern Tracking
+
+When implementing a cross-repo interaction (glue code that uses two or more sibling repos
+together), check whether a known-good pattern already exists before writing new code.
+
+**Rules:**
+
+1. **Before implementing a cross-repo interaction**, call `versholn.find_combos(repo_root)` and
+   read any returned files. These document canonical patterns and known pitfalls:
+
+   ```python
+   for p in versholn.find_combos():
+       print(p.read_text())
+   ```
+
+2. **If no combo file exists** for the pair you are implementing and the interaction is
+   non-trivial, seed a stub in `nielsoln_project_hub/combos/{a}+{b}.md`
+   (alphabetical repo names). Human review refines stubs into canonical docs.
+
+3. **Combo stub format** — minimum required sections:
+
+   ```markdown
+   # {a} + {b}
+
+   ## Canonical Pattern
+   <!-- TODO: describe the primary integration point -->
+
+   ## Known Pitfalls
+   <!-- TODO: describe ordering, init, or teardown issues -->
+
+   ## Reference Implementation
+   <!-- TODO: link to the best real-world example in one of the repos -->
+   ```
+
+4. **Run `op_scan_combos`** in `hub.py` (OPERATION = "scan_combos") to see which dep pairs
+   across the workspace have no combo file yet.
+
+5. Combo files are **never auto-generated in bulk** — seed them only when you have real
+   knowledge of the interaction.
+
+---
+
 ## Documentation Standards
 
 - Explain *why* a non-obvious design choice was made — not what the code does.

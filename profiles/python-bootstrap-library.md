@@ -43,6 +43,12 @@ other repos.
 - Single-file library (`versholn.py`) — no package structure, no `__init__.py`.
 - `importx` caches in a module-level dict, not in `sys.modules`.
 - All public API functions have a clear docstring explaining the caching behaviour.
+- `main()` at the bottom of `versholn.py` provides REPL-style workspace alignment.
+  Toggle `OPERATION` before each run:
+  ```python
+  import runpy ; temp = runpy._run_module_as_main("versholn")
+  ```
+  See `AGENTS.base.md` § *Workspace Branch State* for full usage.
 
 ---
 

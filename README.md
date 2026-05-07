@@ -41,12 +41,31 @@ Running `python update_agents.py` in any project repo:
    and `AGENTS.local.md` at the end (later rules override earlier rules)
 4. Records the generation timestamp and standards repo SHA in the file header
 
-## Adding a new project repo
+## Onboarding a new project repo
 
-1. Add `update_agents.py` (shim) to the project repo root
-2. Create `AGENTS.project.json` with the appropriate profile list
-3. Add `AGENT_STANDARDS_DIR=..\nielsoln_agent_standards` to `locals.txt.example`
-4. Run `python update_agents.py`
+Run `compliance.py` to see what is missing and why each item is required:
+
+```powershell
+python compliance.py <repo_name>
+```
+
+`compliance.py` is the single source of truth for what "compliant" means — its
+checks and their documented `why`/`fix` fields are the onboarding guide.
+
+To bring a non-compliant repo into compliance, open it in VS Code and ask the
+agent to fix the issues listed in the compliance output. The agent uses AGENTS.md
+and the fix descriptions to scaffold the missing pieces correctly for that repo.
+
+```powershell
+# Audit all repos
+python compliance.py
+
+# Audit one repo
+python compliance.py usb_device_tools
+
+# Override the repos root (if LUNK_REPOS_ROOT not in locals.txt)
+python compliance.py --root C:\analytics\projects\git\lunk
+```
 
 ## Adding a new profile
 
