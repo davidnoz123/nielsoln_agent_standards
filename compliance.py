@@ -262,6 +262,35 @@ def check_branch_not_main(repo: Path) -> CheckResult:
     )
 
 
+def check_remote_tracking(repo: Path) -> CheckResult:
+    """Current branch must have a remote tracking branch set up."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=repo, capture_output=True, text=True, timeout=10
+        )
+        tracking = result.stdout.strip()
+        has_tracking = result.returncode == 0 and bool(tracking)
+    except Exception:
+        tracking = ""
+        has_tracking = False  # can't check, don't fail
+    return CheckResult(
+        name=f"remote tracking branch ({tracking or 'none'})",
+        passed=has_tracking,
+        why=(
+            "The current branch must be pushed to GitHub and track a remote branch. "
+            "Without this, commits exist only locally and are invisible to collaborators "
+            "and CI. It also means 'git status' never shows ahead/behind counts."
+        ),
+        fix=(
+            "Push the branch and set tracking:\n"
+            "  git push -u origin <branch>\n"
+            "Replace <branch> with the current release branch name (e.g. 0.1)."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry — ordered list of all checks to run
 # ---------------------------------------------------------------------------
@@ -274,6 +303,7 @@ ALL_CHECKS = [
     check_locals_txt_example,
     check_gitignore_locals,
     check_branch_not_main,
+    check_remote_tracking,
 ]
 
 
