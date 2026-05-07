@@ -358,6 +358,10 @@ def main():
         print(f"ERROR: LUNK_REPOS_ROOT does not exist: {lunk_root}", file=sys.stderr)
         sys.exit(1)
 
+    # Never audit ourselves — this repo IS the standards source; the update_agents.py
+    # and AGENTS.md checks are meaningless here and would always fail by design.
+    self_repo = standards_dir.resolve()
+
     if args.repos:
         targets = [lunk_root / name for name in args.repos]
         missing = [p for p in targets if not p.is_dir()]
@@ -365,11 +369,17 @@ def main():
             for p in missing:
                 print(f"ERROR: repo not found: {p}", file=sys.stderr)
             sys.exit(1)
+        skipped = [p for p in targets if p.resolve() == self_repo]
+        if skipped:
+            print(f"(Skipping {skipped[0].name} — cannot audit the standards repo against itself)", file=sys.stderr)
+            targets = [p for p in targets if p.resolve() != self_repo]
+        if not targets:
+            sys.exit(0)
     else:
-        # All subdirectories that look like git repos
+        # All subdirectories that look like git repos, excluding this repo
         targets = sorted(
             p for p in lunk_root.iterdir()
-            if p.is_dir() and (p / ".git").exists()
+            if p.is_dir() and (p / ".git").exists() and p.resolve() != self_repo
         )
 
     reports = []
