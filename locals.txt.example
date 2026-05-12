@@ -1,2 +1,16 @@
 LUNK_REPOS_ROOT=C:\analytics\projects\git\lunk
-GITHUB_TOKEN=ghp_your_token_here
+
+# GitHub fine-grained personal access token.
+# Generate at: https://github.com/settings/tokens?type=beta
+#
+# Token type: Fine-grained personal access token
+# Resource owner: your GitHub account
+# Repository access: All repositories (or select the lunk repos explicitly)
+#
+# Required repository permissions:
+#   Metadata:        read  (auto-granted; needed for repo visibility checks)
+#   Administration:  read  (needed to read repo visibility in compliance check)
+#
+# If hub.py write operations are also needed (set_visibility, set_topics,
+# archive, delete_branch), add: Administration: write, Contents: write
+GITHUB_TOKEN=
