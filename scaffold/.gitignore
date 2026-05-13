@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Machine-specific local config
+locals.txt
+
+# Agent local overrides (machine-specific, must not be committed)
+AGENTS.local.md
