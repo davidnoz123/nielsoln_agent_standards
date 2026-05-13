@@ -204,6 +204,47 @@ Before committing any Python changes:
 2. **Manual test** the affected code path locally if possible
 3. If the repo defines a test suite, run it — your `AGENTS.project.md` will specify how
 
+### Making a repo versholn-compliant (onboarding checklist)
+
+When bringing a new repo into the lunk workspace or making an existing repo
+versholn-compliant, complete these steps **in order**:
+
+1. Create `AGENTS.project.json` — declare which profiles apply:
+   ```json
+   {
+     "standards_repo_raw_base": "https://raw.githubusercontent.com/davidnoz123/nielsoln_agent_standards/0.1",
+     "profiles": ["AGENTS.base", "profiles/python-cli"]
+   }
+   ```
+   Choose from: `profiles/python-cli`, `profiles/python-integration`,
+   `profiles/python-excel-vba`, `profiles/python-chrome-cdp`,
+   `profiles/python-backend-service`, `profiles/python-bootstrap-library`,
+   `profiles/architecture-phased`, `profiles/python-github-admin`.
+
+2. Create or verify `AGENTS.project.md` — hand-written project-specific rules
+   (purpose, dev style, module layout, sibling deps, etc.).
+
+3. Copy `update_agents.py` from any compliant sibling repo — it is a generic
+   shim, do not customise it.
+
+4. Run `update_agents.py` to generate `AGENTS.md`:
+   ```powershell
+   & "C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe" update_agents.py
+   ```
+   Requires `AGENT_STANDARDS_DIR` in `locals.txt`.
+
+5. **Run `compliance.py` to verify all checks pass** — this is the single source
+   of truth for what "compliant" means:
+   ```powershell
+   & "C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe" `
+       C:\analytics\dave\nielsoln_agent_standards\compliance.py `
+       --root <parent-dir> <repo-name>
+   ```
+   Fix every `[FAIL]` before committing. `[WARN]` items are advisory.
+
+6. Commit: `AGENTS.project.json`, `AGENTS.project.md`, `AGENTS.md`,
+   `update_agents.py`, and any `.gitignore` changes together in one commit.
+
 ### When unsure about a change
 
 1. Check `AGENTS.project.md` first — it may already address the situation.
