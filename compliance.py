@@ -20,6 +20,7 @@ import sys
 import os
 import json
 import argparse
+import re
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -252,6 +253,44 @@ def _get_current_branch(repo: Path) -> str:
         return "unknown"
 
 
+def _parse_release_branch(name: str):
+    """Return (major, minor) for release branch names like '0.1', else None."""
+    m = re.fullmatch(r"(\d+)\.(\d+)", name or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _get_latest_remote_release_branch(repo: Path):
+    """Return latest remote release branch name (e.g. '0.2'), or None."""
+    import subprocess
+
+    try:
+        remote_url = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo, capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        if not remote_url:
+            return None
+
+        ls = subprocess.run(
+            ["git", "ls-remote", "--heads", remote_url],
+            cwd=repo, capture_output=True, text=True, timeout=30
+        )
+        if ls.returncode != 0:
+            return None
+
+        remote_branches = [
+            line.split("refs/heads/", 1)[1].strip()
+            for line in ls.stdout.splitlines()
+            if "refs/heads/" in line
+        ]
+        versioned = [b for b in remote_branches if _parse_release_branch(b)]
+        if not versioned:
+            return None
+        return max(versioned, key=_parse_release_branch)
+    except Exception:
+        return None
+
+
 def check_branch_not_main(repo: Path) -> CheckResult:
     """
     All development happens on a <N>.<M> release branch, never directly on main.
@@ -309,12 +348,7 @@ def check_on_latest_branch(repo: Path) -> CheckResult:
     The current branch should be the highest-versioned <N>.<M> branch on the remote.
     Uses git ls-remote for a live view (no stale cache). Advisory warning only.
     """
-    import re
     import subprocess
-
-    def parse_version(name):
-        m = re.fullmatch(r"(\d+)\.(\d+)", name)
-        return (int(m.group(1)), int(m.group(2))) if m else None
 
     try:
         cur = subprocess.run(
@@ -322,42 +356,12 @@ def check_on_latest_branch(repo: Path) -> CheckResult:
             cwd=repo, capture_output=True, text=True, timeout=10
         ).stdout.strip()
 
-        # Get remote URL
-        remote_url = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=repo, capture_output=True, text=True, timeout=10
-        ).stdout.strip()
-
-        if not remote_url:
-            return CheckResult(
-                name=f"latest branch (no remote url)",
-                passed=True, warning=True, why="", fix="",
-            )
-
-        # Live query — lists all remote heads without fetching
-        ls = subprocess.run(
-            ["git", "ls-remote", "--heads", remote_url],
-            cwd=repo, capture_output=True, text=True, timeout=30
-        )
-        if ls.returncode != 0:
-            return CheckResult(
-                name=f"latest branch (ls-remote failed)",
-                passed=True, warning=True, why="", fix="",
-            )
-
-        remote_branches = [
-            line.split("refs/heads/", 1)[1].strip()
-            for line in ls.stdout.splitlines()
-            if "refs/heads/" in line
-        ]
-        versioned = [b for b in remote_branches if parse_version(b)]
-        if not versioned:
+        latest = _get_latest_remote_release_branch(repo)
+        if not latest:
             return CheckResult(
                 name=f"latest branch (no versioned remote branches)",
                 passed=True, warning=True, why="", fix="",
             )
-
-        latest = max(versioned, key=parse_version)
         on_latest = (cur == latest)
     except Exception:
         return CheckResult(
@@ -377,6 +381,93 @@ def check_on_latest_branch(repo: Path) -> CheckResult:
         fix=(
             f"Switch to the latest branch: git checkout {latest}\n"
             "If you intentionally need to patch an older release, ignore this warning."
+        ),
+    )
+
+
+def check_stale_branch_modification_risk(repo: Path) -> CheckResult:
+    """Warn when work appears to be happening on main/older release branch."""
+    import subprocess
+
+    cur = _get_current_branch(repo)
+    latest = _get_latest_remote_release_branch(repo)
+    if not latest:
+        return CheckResult(
+            name="stale branch modification risk (no versioned remote branches)",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    cur_ver = _parse_release_branch(cur)
+    latest_ver = _parse_release_branch(latest)
+    on_stale_branch = (cur == "main") or (
+        cur_ver is not None and latest_ver is not None and cur_ver < latest_ver
+    )
+    if not on_stale_branch:
+        return CheckResult(
+            name=f"stale branch modification risk (current: {cur}, latest: {latest})",
+            passed=True,
+            warning=True,
+            why="",
+            fix="",
+        )
+
+    try:
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo, capture_output=True, text=True, timeout=10
+            ).stdout.strip()
+        )
+
+        ahead = 0
+        ahead_proc = subprocess.run(
+            ["git", "rev-list", "--count", "@{u}..HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=10
+        )
+        if ahead_proc.returncode == 0:
+            ahead = int((ahead_proc.stdout or "0").strip() or "0")
+
+        unique_vs_latest = 0
+        have_latest_ref = subprocess.run(
+            ["git", "show-ref", "--verify", f"refs/remotes/origin/{latest}"],
+            cwd=repo, capture_output=True, text=True, timeout=10
+        ).returncode == 0
+        if have_latest_ref:
+            uvl_proc = subprocess.run(
+                ["git", "rev-list", "--count", f"origin/{latest}..HEAD"],
+                cwd=repo, capture_output=True, text=True, timeout=10
+            )
+            if uvl_proc.returncode == 0:
+                unique_vs_latest = int((uvl_proc.stdout or "0").strip() or "0")
+
+        has_risk = dirty or ahead > 0 or unique_vs_latest > 0
+        details = []
+        if dirty:
+            details.append("dirty working tree")
+        if ahead > 0:
+            details.append(f"{ahead} unpushed commit(s) on current branch")
+        if unique_vs_latest > 0:
+            details.append(f"{unique_vs_latest} commit(s) not in origin/{latest}")
+        detail_str = "; ".join(details) if details else "no local modifications detected"
+    except Exception:
+        return CheckResult(
+            name=f"stale branch modification risk (current: {cur}, latest: {latest})",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    return CheckResult(
+        name=(
+            f"stale branch modification risk (current: {cur}, latest: {latest}; {detail_str})"
+        ),
+        passed=not has_risk,
+        warning=True,
+        why=(
+            "Changes on main or an older release branch are often intended for the latest "
+            "release branch and can be accidentally stranded."
+        ),
+        fix=(
+            f"If this work belongs on {latest}, switch branches and move it there (commit/cherry-pick "
+            "or stash/pop), then rerun compliance."
         ),
     )
 
@@ -477,6 +568,7 @@ ALL_CHECKS = [
     check_branch_not_main,
     check_remote_tracking,
     check_on_latest_branch,
+    check_stale_branch_modification_risk,
     check_github_visibility,
 ]
 
