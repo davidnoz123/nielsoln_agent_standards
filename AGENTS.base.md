@@ -133,6 +133,44 @@ if __name__ == "__main__":
 defined. Without `safe_local_imports`, a hidden-window process exits with no log entry. With it,
 there is always at least one `FATAL` line in the log.
 
+### `install_and_import` — self-healing runtime dependencies
+
+**Never** run `pip install` from a terminal or via a shell command. If a script needs a package
+that may not be installed, define and use `_install_and_import` at module level:
+
+```python
+def _install_and_import(package: str, pip_name: str | None = None):
+    """Import *package*, installing via pip if absent. Returns the module.
+
+    Never call pip from a terminal — use this instead so dependencies are
+    self-healing and the install is auditable in source.
+    """
+    import importlib as _il
+    import subprocess as _sp
+    try:
+        return _il.import_module(package)
+    except ImportError:
+        _log(f"installing {pip_name or package} ...")
+        _sp.check_call(
+            [sys.executable, "-m", "pip", "install", pip_name or package],
+            stdout=_sp.DEVNULL,
+        )
+        return _il.import_module(package)
+```
+
+Call it **inside a function** (never at module level) so a missing package cannot crash the
+process before `_log` is defined:
+
+```python
+def my_function():
+    html2text = _install_and_import("html2text")
+    ...
+```
+
+**Why:** `pip install` in a terminal is not auditable in source, breaks reproducibility, and is
+invisible when the agent runs in a non-interactive session. `_install_and_import` is idempotent —
+it no-ops if the package is already present — and leaves a log entry when it actually installs.
+
 ---
 
 ## Safety and Destructive Actions
