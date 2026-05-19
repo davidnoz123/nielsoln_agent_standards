@@ -184,6 +184,45 @@ must be visible to several modules running in the same REPL session.
 
 ---
 
+## Resilient terminal ID tracking (agent guidance)
+
+When an agent's context is refreshed mid-session, the VS Code terminal UUID held in memory is
+lost. Without recovery, the agent spawns a redundant REPL terminal and orphans the live one —
+along with any expensive resources attached to it (CDP connections, loaded models, DB pools).
+
+**Solution: write the terminal UUID to a workspace-scoped file immediately after creation.**
+
+VS Code injects `$env:VSCODE_PID` into every integrated terminal — the PID of the VS Code
+window process that spawned it. Using this as part of the filename naturally scopes the file to
+one VS Code window; multiple VS Code instances open simultaneously each have a different PID and
+therefore a different file, so they cannot interfere with each other.
+
+### On creation
+
+After `run_in_terminal` returns a terminal UUID, immediately run in that terminal:
+
+```powershell
+Remove-Item .repl_terminal_id_* -ErrorAction SilentlyContinue
+"<uuid>" | Set-Content ".repl_terminal_id_$env:VSCODE_PID"
+```
+
+The `Remove-Item` glob-delete ensures at most one file exists at any time — old files from
+previous VS Code sessions (different PIDs) are cleaned up on each new terminal creation.
+
+Add `.repl_terminal_id_*` to `.gitignore`. The filename to use should be documented in
+`AGENTS.project.md` for the repo.
+
+### On reuse
+
+At the start of any turn that needs the REPL terminal:
+
+1. Read the file: `$id = Get-Content ".repl_terminal_id_$env:VSCODE_PID" -ErrorAction SilentlyContinue`
+2. If `$id` is non-empty, probe liveness: call `get_terminal_output(id=$id)`.
+3. If the probe succeeds (returns output, even empty/idle) — **reuse the terminal. Do not spawn a new one.**
+4. If the file is missing or the probe fails — create a new terminal, then immediately run the write step above.
+
+---
+
 ## Patterns
 
 - `_get_repl_state()` using `builtins` for cross-module shared state; plain globals for single-module state.
