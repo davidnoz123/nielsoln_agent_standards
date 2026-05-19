@@ -31,6 +31,20 @@ sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("my
 `__main__` namespace on every call. Module-level globals survive across re-runs (the `__main__`
 dict is reused, not recreated). Your edits take effect immediately — no restart needed.
 
+**Note:** `runpy._run_module_as_main` is a private CPython implementation detail — it is not part
+of the public API and may change without notice. This pattern is for development workflows only;
+production code must never call it.
+
+**Important:** `runpy` only re-reads the entry-point module. Any modules it imports are already
+cached in `sys.modules` and will **not** pick up disk changes automatically. Use a dedicated
+`repl_reload.py` helper (see Rule 5) to reload all project modules in bottom-up order before
+each `runpy` call:
+
+```python
+import repl_reload ; repl_reload.reload_all()
+sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+```
+
 ---
 
 ## State sharing across modules — use `builtins`
@@ -42,11 +56,13 @@ module B, the only shared namespace is `builtins`:
 ```python
 import builtins as _builtins
 
+_STATE_KEY = "_repl_state_mypackage"  # namespaced to avoid collisions with other projects
+
 def _get_repl_state() -> dict:
     """Return the process-global REPL state dict, shared across all modules."""
-    if not hasattr(_builtins, "_repl_state"):
-        _builtins._repl_state = {}
-    return _builtins._repl_state
+    if not hasattr(_builtins, _STATE_KEY):
+        setattr(_builtins, _STATE_KEY, {})
+    return getattr(_builtins, _STATE_KEY)
 
 def get_repl_client(port: int = 9222):
     """Return the cached resource, connecting lazily and rechecking liveness."""
@@ -84,10 +100,51 @@ must be visible to several modules running in the same REPL session.
            _log(f"main() returned {rc}")
    ```
 
-5. **`sys.argv[1:]` — always slice from index 1**, not 0. `sys.argv[0:]` overwrites the module
+5. **Reload imported modules before each `runpy` call using an ordered reload helper.**
+   `runpy._run_module_as_main` re-reads only the entry-point file; every other module is served
+   from `sys.modules` cache. The recommended pattern is a dedicated `repl_reload.py` that lists
+   all project modules in bottom-up dependency order (leaves first, entry point last):
+   ```python
+   # repl_reload.py  — committed to the repo, kept up to date as modules are added
+   import importlib
+   import mypackage.db, mypackage.utils, mypackage.core
+
+   RELOAD_ORDER = [mypackage.db, mypackage.utils, mypackage.core]
+
+   def reload_all():
+       importlib.invalidate_caches()  # pick up any new .py files added since last reload
+       for mod in RELOAD_ORDER:
+           importlib.reload(mod)
+   ```
+   Then the REPL one-liner stays clean:
+   ```python
+   import repl_reload ; repl_reload.reload_all()
+   sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+   ```
+   `repl_reload.py` must be updated whenever a new project module is added. If you forget a
+   module, your edits to it will silently have no effect. The explicit ordered list also serves
+   as documentation of the project's internal dependency graph.
+
+6. **Use `import module` style, not `from module import name`, in REPL modules.**
+   `importlib.reload` mutates the module object in-place inside `sys.modules`. Code that accesses
+   `mypackage.db.get_connection()` always resolves through `sys.modules` and sees the reloaded
+   version. But `from mypackage.db import get_connection` binds a name directly to the old
+   function object in the importing module's namespace — reload of `mypackage.db` does **not**
+   update that binding, so the stale version runs silently:
+   ```python
+   # BAD — get_connection is bound at import time; reload of mypackage.db has no effect here
+   from mypackage.db import get_connection
+   get_connection()
+
+   # GOOD — resolved through sys.modules on every call; sees the reloaded module
+   import mypackage.db
+   mypackage.db.get_connection()
+   ```
+
+7. **`sys.argv[1:]` — always slice from index 1**, not 0. `sys.argv[0:]` overwrites the module
    name slot used by `runpy` and breaks command dispatch.
 
-6. **The module docstring must include the REPL invocation** so it is discoverable at the start
+8. **The module docstring must include the REPL invocation** so it is discoverable at the start
    of a new session:
    ```python
    """My automation module.
@@ -96,6 +153,34 @@ must be visible to several modules running in the same REPL session.
        sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
    """
    ```
+
+9. **Use a namespaced key when storing state in `builtins`.** The `builtins` namespace is
+   process-global and shared by every loaded module. A generic key like `_repl_state` will
+   collide if multiple projects or libraries are loaded in the same session. Always prefix the
+   key with the package name (e.g. `_repl_state_mypackage`).
+
+10. **Old names and old instances can survive a reload.** Re-running `runpy` does not clean
+    `__main__` — names deleted from source persist until the session is restarted.
+    `importlib.reload` updates the module object but existing instances of classes defined in
+    that module still carry the old class's methods and `__dict__` layout. When behaviour is
+    inexplicably stale, restart the REPL.
+
+11. **Restart the REPL when reload behaviour becomes confusing.** Reload is additive, not
+    restorative. Restart after: installing or upgrading packages; changing `sys.path` or
+    `.pth` files; changing class definitions that live objects already reference; any situation
+    where an edit demonstrably has no effect despite correct reloading.
+
+12. **Do not call `reload_all()` while background threads or async tasks are running.**
+    Reloading a module mid-execution can leave a thread holding references to old function
+    objects while new code is only partially applied. Restrict `reload_all()` calls to
+    single-threaded command handlers, or stop background tasks before reloading and restart
+    them after.
+
+13. **Call `importlib.invalidate_caches()` after adding new files to the project.** Python
+    caches filesystem scans for importable modules at startup. New `.py` files added to a
+    package directory after the REPL started are invisible to `import` until the cache is
+    cleared. `reload_all()` already does this (see Rule 5), but call it manually if you add a
+    file between `runpy` invocations without going through `reload_all()`.
 
 ---
 
@@ -114,3 +199,4 @@ must be visible to several modules running in the same REPL session.
 - Closing the shared resource inside a command handler.
 - Running `python mymodule.py command` in a terminal instead of re-running in the live REPL.
 - `sys.argv[0:] = ["command"]` — corrupts the module name slot.
+- `from mypackage.db import name` in REPL modules — reload does not rebind these; edits silently have no effect.
