@@ -6,11 +6,11 @@ the profile system. This script is the single source of truth for what
 "compliant" means — reading it teaches you the onboarding requirements.
 
 Usage:
-    python compliance.py                    # check all repos in LUNK_REPOS_ROOT
+    python compliance.py                    # check all repos in VERSHOLN_REPOS_ROOT
     python compliance.py chrome_tools       # check one repo by name
-    python compliance.py --root C:\path     # override LUNK_REPOS_ROOT
+    python compliance.py --root C:\path     # override VERSHOLN_REPOS_ROOT
 
-Requires LUNK_REPOS_ROOT in locals.txt (or --root flag).
+VERSHOLN_REPOS_ROOT is derived automatically from __file__; use --root to override.
 
 To bring a non-compliant repo into compliance, open it in VS Code and ask
 the agent to fix the issues listed in the compliance output.
@@ -25,6 +25,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from dataclasses import dataclass, field
+
+# Root of the versholn workspace (grandparent of this file's directory).
+VERSHOLN_REPOS_ROOT = Path(__file__).parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -724,11 +727,11 @@ def main():
     )
     parser.add_argument(
         "repos", nargs="*",
-        help="Repo names to check (default: all repos in LUNK_REPOS_ROOT)"
+        help="Repo names to check (default: all repos in VERSHOLN_REPOS_ROOT)"
     )
     parser.add_argument(
         "--root", default=None,
-        help="Path to parent directory containing all repos (overrides LUNK_REPOS_ROOT)"
+        help="Path to parent directory containing all repos (overrides VERSHOLN_REPOS_ROOT)"
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
@@ -742,17 +745,10 @@ def main():
     if args.root:
         lunk_root = Path(args.root)
     else:
-        lunk_root_str = locals_data.get("LUNK_REPOS_ROOT", "")
-        if not lunk_root_str:
-            print("ERROR: LUNK_REPOS_ROOT not found in locals.txt", file=sys.stderr)
-            print("Add a line like:", file=sys.stderr)
-            print("  LUNK_REPOS_ROOT=C:\\analytics\\projects\\git\\lunk", file=sys.stderr)
-            print("Or use --root to specify the path directly.", file=sys.stderr)
-            sys.exit(1)
-        lunk_root = Path(lunk_root_str)
+        lunk_root = VERSHOLN_REPOS_ROOT
 
     if not lunk_root.is_dir():
-        print(f"ERROR: LUNK_REPOS_ROOT does not exist: {lunk_root}", file=sys.stderr)
+        print(f"ERROR: VERSHOLN_REPOS_ROOT does not exist: {lunk_root}", file=sys.stderr)
         sys.exit(1)
 
     # The standards repo itself is exempt from AGENTS infrastructure checks

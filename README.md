@@ -63,7 +63,7 @@ python compliance.py
 # Audit one repo
 python compliance.py usb_device_tools
 
-# Override the repos root (if LUNK_REPOS_ROOT not in locals.txt)
+# Override the auto-derived VERSHOLN_REPOS_ROOT
 python compliance.py --root C:\analytics\projects\git\lunk
 ```
 

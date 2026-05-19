@@ -72,7 +72,7 @@ if interrupted. It performs every step automatically:
 
 1. Creates a **private** GitHub repo with `auto_init=True` (skips if already exists).
 2. Cuts a `0.1` release branch from `main` on GitHub (skips if already exists).
-3. Clones the repo locally under `LUNK_REPOS_ROOT` (skips if already cloned).
+3. Clones the repo locally under `VERSHOLN_REPOS_ROOT` (skips if already cloned).
 4. Checks out `0.1`.
 5. Copies scaffold files from `nielsoln_agent_standards/scaffold/` — the canonical source
    for `.gitignore`, `locals.txt.example`, `update_agents.py`, `AGENTS.project.json`,

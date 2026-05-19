@@ -1,5 +1,3 @@
-LUNK_REPOS_ROOT=C:\analytics\projects\git\lunk
-
 # GitHub fine-grained personal access token.
 # Generate at: https://github.com/settings/tokens?type=beta
 #
