@@ -192,22 +192,30 @@ along with any expensive resources attached to it (CDP connections, loaded model
 
 **Solution: write the terminal UUID to a workspace-scoped file immediately after creation.**
 
-VS Code injects `$env:VSCODE_PID` into every integrated terminal — the PID of the VS Code
-window process that spawned it. Using this as part of the filename naturally scopes the file to
-one VS Code window; multiple VS Code instances open simultaneously each have a different PID and
-therefore a different file, so they cannot interfere with each other.
+VS Code injects a unique per-instance token into every terminal via `VSCODE_GIT_IPC_HANDLE`
+(e.g. `\\.\pipe\vscode-git-54a36a39f2-sock`). Extracting the hash from this handle gives a
+stable per-VS Code-window ID that is available in both user-opened terminals and agent-run
+terminals. Multiple VS Code instances have different handles, so their files never collide.
+
+Extract the token with:
+```powershell
+$vsid = ($env:VSCODE_GIT_IPC_HANDLE -replace '.*vscode-git-([^-]+)-sock.*', '$1')
+```
+
+Note: `$env:VSCODE_PID` is **not** reliable — it is not injected in agent-run terminals.
 
 ### On creation
 
-After `run_in_terminal` returns a terminal UUID, immediately run in that terminal:
+After `run_in_terminal` returns a terminal UUID, immediately run in another terminal:
 
 ```powershell
+$vsid = ($env:VSCODE_GIT_IPC_HANDLE -replace '.*vscode-git-([^-]+)-sock.*', '$1')
 Remove-Item .repl_terminal_id_* -ErrorAction SilentlyContinue
-"<uuid>" | Set-Content ".repl_terminal_id_$env:VSCODE_PID"
+"<uuid>" | Set-Content ".repl_terminal_id_$vsid"
 ```
 
 The `Remove-Item` glob-delete ensures at most one file exists at any time — old files from
-previous VS Code sessions (different PIDs) are cleaned up on each new terminal creation.
+previous VS Code sessions (different tokens) are cleaned up on each new terminal creation.
 
 Add `.repl_terminal_id_*` to `.gitignore`. The filename to use should be documented in
 `AGENTS.project.md` for the repo.
@@ -216,7 +224,11 @@ Add `.repl_terminal_id_*` to `.gitignore`. The filename to use should be documen
 
 At the start of any turn that needs the REPL terminal:
 
-1. Read the file: `$id = Get-Content ".repl_terminal_id_$env:VSCODE_PID" -ErrorAction SilentlyContinue`
+1. Read the file:
+   ```powershell
+   $vsid = ($env:VSCODE_GIT_IPC_HANDLE -replace '.*vscode-git-([^-]+)-sock.*', '$1')
+   $id = Get-Content ".repl_terminal_id_$vsid" -ErrorAction SilentlyContinue
+   ```
 2. If `$id` is non-empty, probe liveness: call `get_terminal_output(id=$id)`.
 3. If the probe succeeds (returns output, even empty/idle) — **reuse the terminal. Do not spawn a new one.**
 4. If the file is missing or the probe fails — create a new terminal, then immediately run the write step above.
