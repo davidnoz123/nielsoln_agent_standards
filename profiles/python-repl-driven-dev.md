@@ -235,6 +235,105 @@ At the start of any turn that needs the REPL terminal:
 
 ---
 
+## REPL session log capture (`_cmd_capture`)
+
+Every `runpy._run_module_as_main` invocation produces terminal output that accumulates in a 32 KB
+scrollback buffer. Agents reading that buffer get a large, noisy blob containing multiple prior
+commands. Prompts fed back into interactive `[y/N]` handlers fill the buffer with character-by-character echo.
+
+**Solution: tee `sys.stdout` and `sys.stderr` to a timestamped log file on every invocation.**
+
+### `_TeeStream`
+
+```python
+class _TeeStream:
+    """Writes to both a primary stream (original stdout/stderr) and a secondary file handle."""
+    def __init__(self, primary, secondary):
+        self._primary = primary
+        self._secondary = secondary
+
+    def write(self, data):
+        self._primary.write(data)
+        self._primary.flush()
+        self._secondary.write(data)
+        self._secondary.flush()
+
+    def flush(self):
+        self._primary.flush()
+        self._secondary.flush()
+
+    def fileno(self):
+        return self._primary.fileno()  # subprocess compat
+```
+
+### `_cmd_capture`
+
+```python
+@contextlib.contextmanager
+def _cmd_capture():
+    log_dir = os.path.join(REPO_ROOT, "repl_logs")
+    os.makedirs(log_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    pid = os.getpid()
+    # 10-digit zero-padded PID: covers 32-bit Windows (max 4,294,967,295)
+    # and 22-bit Linux (max 4,194,304). Equal-width filenames on all platforms.
+    log_path = os.path.join(log_dir, f"{pid:010d}_{ts}.log")
+    # Print BEFORE redirect — always visible in REPL terminal buffer
+    print(f"[capture] log → {log_path}", flush=True)
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write(f"argv: {sys.argv}\n")
+        fh.flush()
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(old_out, fh)
+        sys.stderr = _TeeStream(old_err, fh)
+        try:
+            yield log_path
+        finally:
+            sys.stdout = old_out
+            sys.stderr = old_err
+```
+
+### Usage in `__main__` block
+
+```python
+if __name__ == "__main__":
+    safe_local_imports(globals())
+    with _cmd_capture():
+        try:
+            rc = main()
+            if rc:
+                _log(f"main() returned {rc}")
+        except Exception:
+            import traceback
+            _log(f"FATAL unhandled exception:\n{traceback.format_exc()}")
+            raise
+```
+
+`safe_local_imports` runs before `_cmd_capture` so that import errors surface in the terminal
+before log redirect is active. The FATAL handler logs the full traceback via `_log()` (tee'd to
+the file) before re-raising.
+
+### Agent workflow with log files
+
+```powershell
+# Read the most recent log after a runpy invocation
+Get-ChildItem repl_logs\ | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content
+```
+
+The log path is printed to real stdout **before** the tee redirect, so it is always visible in
+the REPL terminal buffer — use it to read the file directly instead of parsing scrollback.
+
+### Rules
+
+- Add `repl_logs/` to `.gitignore`.
+- Add `import contextlib` to the stdlib imports block.
+- `_TeeStream` and `_cmd_capture` must be defined at module level, before any function that uses them.
+- Log filenames are `{pid:010d}_{timestamp}.log` — sortable by name, equal-width on all platforms.
+- The `argv:` line is written to the file before stdout/stderr are redirected, so it is always present even if `main()` crashes immediately.
+- Do **not** call `_cmd_capture()` from within REPL invocations — it is only for the `__main__` block. Each `runpy._run_module_as_main` re-enters `__main__` and therefore gets a fresh log file automatically.
+
+---
+
 ## Patterns
 
 - `_get_repl_state()` using `builtins` for cross-module shared state; plain globals for single-module state.
