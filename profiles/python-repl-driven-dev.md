@@ -106,15 +106,39 @@ def _get_shared_state() -> dict:
 3. **Never close a shared resource inside a command handler.** The resource is shared across all
    re-runs. Only a dedicated teardown command (e.g. `disconnect`) should close it.
 
-4. **Do not use `raise SystemExit`** in the `__main__` block of REPL modules. `SystemExit`
-   propagates out of `runpy` and kills the interactive session. Call `main()` and log a non-zero
-   return code instead:
-   ```python
-   if __name__ == "__main__":
-       rc = main()
-       if rc:
-           _log(f"main() returned {rc}")
-   ```
+4. **Never call `sys.exit()` or `raise SystemExit` anywhere in a REPL module** — not in
+   `__main__`, not in helper functions, not in command handlers. Both propagate out of `runpy`
+   and kill the interactive session immediately, with no recovery.
+
+   - `__main__` block: call `main()` and log a non-zero return code instead of `raise SystemExit`:
+     ```python
+     if __name__ == "__main__":
+         rc = main()
+         if rc:
+             _log(f"main() returned {rc}")
+     ```
+   - Helper functions: return `None` on failure (with a logged error message). Callers must
+     check for `None` and propagate with `return 1`:
+     ```python
+     def _get_cli(port=None):
+         if not health.is_alive():
+             _log("[chrome] Chrome is not running.")
+             return None          # NOT sys.exit(1)
+         ...
+
+     def cmd_something() -> int:
+         cli = _get_cli()
+         if cli is None:
+             return 1             # caller propagates the failure
+         ...
+     ```
+
+   **Why this keeps coming back:** The `sys.exit()` anti-pattern feels natural in CLI code
+   (the CLI profile explicitly uses it). REPL modules look similar. The key difference: in a
+   CLI the process is disposable; in a REPL it holds expensive resources (open WebSocket,
+   loaded model, etc.) that take seconds to re-acquire. Killing the session with `sys.exit()`
+   in a helper is silent and hard to diagnose — `runpy` propagates `SystemExit` without any
+   message, and the REPL prompt simply disappears.
 
 5. **Reload imported modules before each `runpy` call using an ordered reload helper.**
    `runpy._run_module_as_main` re-reads only the entry-point file; every other module is served
@@ -363,6 +387,7 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 ## Anti-patterns
 
 - `raise SystemExit(main())` in the `__main__` block of a REPL module.
+- `sys.exit()` inside any helper function — kills the REPL session silently; use `return None` and check at the call site.
 - Closing the shared resource inside a command handler.
 - Running `python mymodule.py command` in a terminal instead of re-running in the live REPL.
 - `sys.argv[0:] = ["command"]` — corrupts the module name slot.
