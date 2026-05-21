@@ -328,7 +328,7 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 - Add `repl_logs/` to `.gitignore`.
 - Add `import contextlib` to the stdlib imports block.
 - `_TeeStream` and `_cmd_capture` must be defined at module level, before any function that uses them.
-- Log filenames are `{pid:010d}_{timestamp}.log` — sortable by name, equal-width on all platforms.
+- Log filenames are `{YYYYMMDDTHHMMSS}{ms:03d}_{pid:010d}.log` — datetime-first so directory listings sort chronologically; milliseconds zero-padded without separator; PID zero-padded to 10 digits.
 - The `argv:` line is written to the file before stdout/stderr are redirected, so it is always present even if `main()` crashes immediately.
 - Do **not** call `_cmd_capture()` from within REPL invocations — it is only for the `__main__` block. Each `runpy._run_module_as_main` re-enters `__main__` and therefore gets a fresh log file automatically.
 
