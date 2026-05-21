@@ -364,6 +364,16 @@ Get-ChildItem repl_logs\ | Sort-Object LastWriteTime -Descending | Select-Object
 The log path is printed to real stdout **before** the tee redirect, so it is always visible in
 the REPL terminal buffer — use it to read the file directly instead of parsing scrollback.
 
+> **⛔ Agent rule: NEVER use `get_terminal_output` scrollback to read REPL results.**
+>
+> After every `runpy._run_module_as_main(...)` call:
+> 1. Read the `[capture] log → <path>` line from the terminal buffer (it is always the first line of output).
+> 2. Read **that file** with `read_file` or `Get-Content` — it contains the complete, unfragmented output.
+>
+> `get_terminal_output` scrollback is a 32 KB ring buffer shared across all commands in the
+> session. It is truncated, noisy, and may contain output from prior commands.
+> Log files are always complete. **Read the log file. Always.**
+
 ### Rules
 
 - Add `repl_logs/` to `.gitignore`.
