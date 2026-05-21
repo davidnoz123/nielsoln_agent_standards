@@ -47,22 +47,21 @@ sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("my
 
 ---
 
-## State sharing across modules — use `builtins`
+## Module-local REPL state — use `globals()`
 
-Module `globals()` survives re-runs of the **same** module, but each module has its own
-`globals()` dict. If an expensive resource is created in module A and must be accessible from
-module B, the only shared namespace is `builtins`:
+Module `globals()` survives re-runs of the **same** module via `runpy._run_module_as_main`,
+because the `__main__` dict is reused. Store REPL state there. Each module owns its own
+state; resources are passed as arguments rather than shared cross-module.
 
 ```python
-import builtins as _builtins
-
-_STATE_KEY = "_repl_state_mypackage"  # namespaced to avoid collisions with other projects
+_REPL_STATE_KEY = "_repl_state"
 
 def _get_repl_state() -> dict:
-    """Return the process-global REPL state dict, shared across all modules."""
-    if not hasattr(_builtins, _STATE_KEY):
-        setattr(_builtins, _STATE_KEY, {})
-    return getattr(_builtins, _STATE_KEY)
+    """Return this module's REPL state dict (persists across runpy re-runs)."""
+    g = globals()
+    if _REPL_STATE_KEY not in g:
+        g[_REPL_STATE_KEY] = {}
+    return g[_REPL_STATE_KEY]
 
 def get_repl_client(port: int = 9222):
     """Return the cached resource, connecting lazily and rechecking liveness."""
@@ -74,8 +73,25 @@ def get_repl_client(port: int = 9222):
     return client
 ```
 
-Use plain module globals when only one module needs the state. Use `builtins` when the state
-must be visible to several modules running in the same REPL session.
+To evict the cache from a REPL prompt:
+```python
+globals().pop('_repl_state', None)
+```
+
+**`builtins` for genuine cross-module sharing (rare):** If an expensive resource created
+in module A truly must be accessed from module B in the same session, `builtins` is the
+only shared namespace. This is an antipattern unless unavoidable — prefer redesigning
+so the resource is passed as an argument.
+
+```python
+import builtins as _builtins
+_STATE_KEY = "_repl_state_mypackage"  # namespaced — builtins is process-global
+
+def _get_shared_state() -> dict:
+    if not hasattr(_builtins, _STATE_KEY):
+        setattr(_builtins, _STATE_KEY, {})
+    return getattr(_builtins, _STATE_KEY)
+```
 
 ---
 
@@ -154,10 +170,11 @@ must be visible to several modules running in the same REPL session.
    """
    ```
 
-9. **Use a namespaced key when storing state in `builtins`.** The `builtins` namespace is
-   process-global and shared by every loaded module. A generic key like `_repl_state` will
-   collide if multiple projects or libraries are loaded in the same session. Always prefix the
-   key with the package name (e.g. `_repl_state_mypackage`).
+9. **`globals()` is the default for per-module REPL state.** Do not use `builtins` unless
+   state genuinely must be shared between two distinct imported modules in the same session
+   (rare — prefer passing resources as arguments instead). When `builtins` is unavoidable,
+   always namespace the key (e.g. `_repl_state_mypackage`) — the `builtins` namespace is
+   process-global and a generic key will collide with other projects.
 
 10. **Old names and old instances can survive a reload.** Re-running `runpy` does not clean
     `__main__` — names deleted from source persist until the session is restarted.
@@ -336,7 +353,7 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 
 ## Patterns
 
-- `_get_repl_state()` using `builtins` for cross-module shared state; plain globals for single-module state.
+- `_get_repl_state()` using `globals()` for per-module state; `builtins` only when two distinct modules must genuinely share a resource (prefer argument passing instead).
 - `get_repl_client()` (or equivalent) that connects lazily and rechecks liveness on every call.
 - `sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mod")` in the REPL.
 - Command dispatch on `sys.argv[1]` inside `main()`.
