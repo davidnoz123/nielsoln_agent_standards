@@ -24,7 +24,7 @@ means you pay the 2 s once per session, not once per edit.
 ## Core mechanism — `runpy._run_module_as_main` re-reads from disk
 
 ```python
-sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+import sys ; sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
 ```
 
 `runpy._run_module_as_main` re-reads the `.py` file from disk and re-executes it in the existing
@@ -42,7 +42,7 @@ call it at the top of the `__main__` block, so helper modules are always refresh
 command runs:
 
 ```python
-sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
+import sys ; sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
 ```
 
 ---
@@ -179,7 +179,7 @@ def _get_shared_state() -> dict:
    ```
    Because `reload_all()` runs at the top of `__main__`, the REPL one-liner needs no prefix:
    ```python
-   sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
+   import sys ; sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
    ```
    `RELOAD_ORDER` must be updated whenever a new project module is added. If you forget a
    module, your edits to it will silently have no effect. The explicit ordered list also serves
@@ -213,7 +213,7 @@ def _get_shared_state() -> dict:
    """My automation module.
 
    REPL usage:
-       sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+       import sys ; sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
    """
    ```
 
@@ -416,7 +416,7 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 
 - `_get_repl_state()` using `globals()` for per-module state; `builtins` only when two distinct modules must genuinely share a resource (prefer argument passing instead).
 - `get_repl_client()` (or equivalent) that connects lazily and rechecks liveness on every call.
-- `sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mod")` in the REPL.
+- `import sys ; sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mod")` in the REPL.
 - Command dispatch on `sys.argv[1]` inside `main()`.
 
 ---
