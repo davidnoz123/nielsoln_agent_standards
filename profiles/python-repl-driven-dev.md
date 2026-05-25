@@ -36,13 +36,13 @@ of the public API and may change without notice. This pattern is for development
 production code must never call it.
 
 **Important:** `runpy` only re-reads the entry-point module. Any modules it imports are already
-cached in `sys.modules` and will **not** pick up disk changes automatically. Use a dedicated
-`repl_reload.py` helper (see Rule 5) to reload all project modules in bottom-up order before
-each `runpy` call:
+cached in `sys.modules` and will **not** pick up disk changes automatically. The recommended
+pattern (see Rule 5) is to define `reload_all()` inside the REPL entry-point module itself and
+call it at the top of the `__main__` block, so helper modules are always refreshed before any
+command runs:
 
 ```python
-import repl_reload ; repl_reload.reload_all()
-sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
 ```
 
 ---
@@ -140,30 +140,53 @@ def _get_shared_state() -> dict:
    in a helper is silent and hard to diagnose — `runpy` propagates `SystemExit` without any
    message, and the REPL prompt simply disappears.
 
-5. **Reload imported modules before each `runpy` call using an ordered reload helper.**
+5. **Define `reload_all()` in your REPL entry-point module and call it at the top of `__main__`.**
    `runpy._run_module_as_main` re-reads only the entry-point file; every other module is served
-   from `sys.modules` cache. The recommended pattern is a dedicated `repl_reload.py` that lists
-   all project modules in bottom-up dependency order (leaves first, entry point last):
+   from `sys.modules` cache. Keep the reload logic colocated with the code it serves by defining
+   it directly in the REPL entry-point, not in a separate file. The recommended filename is
+   `repl_main.py`, but any name works — what matters is that it is the module you pass to
+   `runpy._run_module_as_main` and that it contains `reload_all()` and the command dispatch:
    ```python
-   # repl_reload.py  — committed to the repo, kept up to date as modules are added
-   import importlib
+   # repl_main.py (recommended name) — REPL entry-point, committed to the repo
+   import importlib, sys
    import mypackage.db, mypackage.utils, mypackage.core
 
+   # Modules in this repo — explicit bottom-up order (leaves first, entry point last).
+   # Update this list whenever a new project module is added.
    RELOAD_ORDER = [mypackage.db, mypackage.utils, mypackage.core]
+
+   # Sibling repos under active development — reloaded by path prefix.
+   # Add entries here for each external repo you are editing in this session.
+   EXTRA_RELOAD_PATHS: list[str] = [
+       # r"C:\analytics\dave\other_repo\src",
+   ]
 
    def reload_all():
        importlib.invalidate_caches()  # pick up any new .py files added since last reload
+       if EXTRA_RELOAD_PATHS:
+           for mod in list(sys.modules.values()):
+               src = getattr(mod, "__file__", "") or ""
+               if any(src.startswith(p) for p in EXTRA_RELOAD_PATHS):
+                   importlib.reload(mod)
        for mod in RELOAD_ORDER:
            importlib.reload(mod)
+
+   if __name__ == "__main__":
+       reload_all()  # always refresh helper modules before executing commands
+       rc = main()
+       if rc:
+           _log(f"main() returned {rc}")
    ```
-   Then the REPL one-liner stays clean:
+   Because `reload_all()` runs at the top of `__main__`, the REPL one-liner needs no prefix:
    ```python
-   import repl_reload ; repl_reload.reload_all()
-   sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("mymodule")
+   sys.argv[1:] = ["command"] ; import runpy ; temp = runpy._run_module_as_main("repl_main")  # or your chosen module name
    ```
-   `repl_reload.py` must be updated whenever a new project module is added. If you forget a
+   `RELOAD_ORDER` must be updated whenever a new project module is added. If you forget a
    module, your edits to it will silently have no effect. The explicit ordered list also serves
    as documentation of the project's internal dependency graph.
+
+   `EXTRA_RELOAD_PATHS` entries must be absolute paths. Leave the list empty (with a commented
+   example) by default — it is edited per-session when working across multiple repos.
 
 6. **Use `import module` style, not `from module import name`, in REPL modules.**
    `importlib.reload` mutates the module object in-place inside `sys.modules`. Code that accesses
@@ -220,8 +243,12 @@ def _get_shared_state() -> dict:
 13. **Call `importlib.invalidate_caches()` after adding new files to the project.** Python
     caches filesystem scans for importable modules at startup. New `.py` files added to a
     package directory after the REPL started are invisible to `import` until the cache is
-    cleared. `reload_all()` already does this (see Rule 5), but call it manually if you add a
-    file between `runpy` invocations without going through `reload_all()`.
+    cleared. `reload_all()` in your REPL entry-point module already does this on every invocation, but call
+    it manually at the REPL prompt if you add a file and want it importable immediately without
+    a full `runpy` cycle:
+    ```python
+    import importlib ; importlib.invalidate_caches()
+    ```
 
 ---
 
