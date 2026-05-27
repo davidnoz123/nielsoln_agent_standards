@@ -261,9 +261,18 @@ When a rule needs to be added or changed:
    - Universal rule (all Python repos) → `AGENTS.base.md`
    - Profile-specific rule → `profiles/<name>.md`
 2. **Commit and push** the change in `nielsoln_agent_standards` (push is required — see above).
-   - The agent must **ask the user to approve the push** before proceeding (pushing to a shared
-     remote is a hard-to-reverse action — confirmation is required per safety rules).
-   - Do NOT proceed to step 3 until the push is confirmed complete.
+   - The agent must ask for push approval using `vscode_askQuestions` with an **Allow** option
+     before running `git push` — pushing to a shared remote is hard to reverse:
+     ```python
+     vscode_askQuestions([{
+         "header": "Push nielsoln_agent_standards",
+         "question": "Push branch 0.1 to GitHub? (<summary of commits>)",
+         "options": [{"label": "Allow", "recommended": True}, {"label": "Skip"}],
+         "allowFreeformInput": False,
+     }])
+     ```
+   - Only run `git push` after the user selects **Allow**. Do NOT proceed to step 3 until the
+     push completes successfully.
    - ⚠️ `update_agents.py` fetches from GitHub, NOT local disk. If you run it before pushing,
      it will silently regenerate `AGENTS.md` from the old remote version, discarding your edits.
 3. In the project repo, run `update_agents.py` to regenerate `AGENTS.md`:
