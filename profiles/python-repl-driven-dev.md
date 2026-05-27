@@ -272,6 +272,33 @@ $vsid = ($env:VSCODE_GIT_IPC_HANDLE -replace '.*vscode-git-([^-]+)-sock.*', '$1'
 
 Note: `$env:VSCODE_PID` is **not** reliable — it is not injected in agent-run terminals.
 
+### Starting the REPL terminal
+
+The REPL terminal must be started by launching `python.exe` with **no arguments**:
+
+```powershell
+# CORRECT — opens an interactive Python prompt that stays alive indefinitely
+run_in_terminal(command="cd <repo> ; & python.exe", mode=async)
+```
+
+The UUID returned by `run_in_terminal` is the ID of this persistent session — store it in `.repl_terminal_id_*` immediately (see **On creation** below).
+
+**All subsequent commands are sent to this terminal via `send_to_terminal`**, never by calling `run_in_terminal` again:
+
+```python
+# Send the runpy one-liner to the live interactive REPL:
+send_to_terminal(id="<uuid>", command="import sys ; sys.argv[1:] = ['network_capture'] ; import runpy ; temp = runpy._run_module_as_main('mymodule')")
+
+# Next command — same terminal, state (CDP connection, loaded model, etc.) is preserved:
+send_to_terminal(id="<uuid>", command="import sys ; sys.argv[1:] = ['incremental_capture'] ; temp = runpy._run_module_as_main('mymodule')")
+```
+
+The distinction in one sentence: **`run_in_terminal` creates the REPL once; `send_to_terminal` runs all commands in it.**
+
+⚠️ **Never use `python.exe -c "..."` to run a REPL command.** `python.exe -c "import sys; sys.argv[1:] = ['cmd']; import runpy; runpy._run_module_as_main('mod')"` spawns a process that exits immediately — it is not a REPL. The UUID it returns is dead on arrival. Storing this UUID in `.repl_terminal_id_*` means every subsequent "reuse" attempt fails and triggers another fresh spawn. All state (cached connections, loaded models) is destroyed on every run — the entire benefit of the pattern is lost.
+
+---
+
 ### On creation
 
 After `run_in_terminal` returns a terminal UUID, immediately run in another terminal:
@@ -429,3 +456,5 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 - Running `python mymodule.py command` in a terminal instead of re-running in the live REPL.
 - `sys.argv[0:] = ["command"]` — corrupts the module name slot.
 - `from mypackage.db import name` in REPL modules — reload does not rebind these; edits silently have no effect.
+- `run_in_terminal(command='python.exe -c "..."')` to invoke a command — this is a one-shot process, not a REPL. Use `run_in_terminal(command="python.exe")` once, then `send_to_terminal` for all commands.
+- Storing the UUID of a `python.exe -c "..."` invocation in `.repl_terminal_id_*` — the process is already dead; every reuse check will fail and spawn yet another fresh process.
