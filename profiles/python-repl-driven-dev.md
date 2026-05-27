@@ -250,6 +250,13 @@ def _get_shared_state() -> dict:
     import importlib ; importlib.invalidate_caches()
     ```
 
+14. **Do NOT run `py_compile` before sending REPL commands.** `runpy._run_module_as_main`
+    re-reads and parses the file from disk on every invocation — it is the syntax check. A
+    `SyntaxError` raises immediately and the full traceback appears in the log file. Running
+    `py_compile` as a separate process before every `send_to_terminal` adds 1–2 s of latency
+    per turn and duplicates what `runpy` does anyway. Reserve `py_compile` for pre-commit
+    checks only (as per `AGENTS.base.md` — "before committing").
+
 ---
 
 ## Resilient terminal ID tracking (agent guidance)
@@ -317,16 +324,21 @@ Add `.repl_terminal_id_*` to `.gitignore`. The filename to use should be documen
 
 ### On reuse
 
-At the start of any turn that needs the REPL terminal:
+**Optimistic execution — no liveness probe.** The REPL terminal is almost always alive. Probing before every use adds unnecessary latency and defeats the fast-cycle purpose of the pattern.
+
+At the start of a conversation (UUID not yet in session memory):
 
 1. Read the file:
    ```powershell
    $vsid = ($env:VSCODE_GIT_IPC_HANDLE -replace '.*vscode-git-([^-]+)-sock.*', '$1')
    $id = Get-Content ".repl_terminal_id_$vsid" -ErrorAction SilentlyContinue
    ```
-2. If `$id` is non-empty, probe liveness: call `get_terminal_output(id=$id)`.
-3. If the probe succeeds (returns output, even empty/idle) — **reuse the terminal. Do not spawn a new one.**
-4. If the file is missing or the probe fails — create a new terminal, then immediately run the write step above.
+2. If `$id` is non-empty — use it directly. Call `send_to_terminal` immediately. Do **not** call `get_terminal_output` first as a liveness probe.
+3. If `send_to_terminal` itself errors — only then create a new terminal and run the write step.
+
+Within a conversation: once the UUID is confirmed working, keep it in session memory and skip the file read on all subsequent turns.
+
+> **Why not probe?** `get_terminal_output` polls the scrollback buffer and has inherent latency (1–3 s per call). Calling it before every REPL command adds that cost to every turn. The VS Code terminal UUID is stable for the lifetime of a VS Code window; the REPL Python process is stable for the lifetime of a conversation. Optimistic execution is correct ≥99% of the time; the rare failure is handled by the error path in step 3.
 
 ---
 
@@ -466,3 +478,5 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 - `from mypackage.db import name` in REPL modules — reload does not rebind these; edits silently have no effect.
 - `run_in_terminal(command='python.exe -c "..."')` to invoke a command — this is a one-shot process, not a REPL. Use `run_in_terminal(command="python.exe")` once, then `send_to_terminal` for all commands.
 - Storing the UUID of a `python.exe -c "..."` invocation in `.repl_terminal_id_*` — the process is already dead; every reuse check will fail and spawn yet another fresh process.
+- Running `py_compile` before a `send_to_terminal` REPL command — redundant and slow; `runpy._run_module_as_main` is the syntax check (Rule 14).
+- Calling `get_terminal_output` as a liveness probe before `send_to_terminal` — it reads scrollback output, not terminal health; it adds 1–3 s latency per turn; use optimistic execution instead (see **On reuse**).
