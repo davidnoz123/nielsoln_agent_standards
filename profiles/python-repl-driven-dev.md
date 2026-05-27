@@ -421,8 +421,16 @@ the REPL terminal buffer — use it to read the file directly instead of parsing
 > **⛔ Agent rule: NEVER use `get_terminal_output` scrollback to read REPL results.**
 >
 > After every `runpy._run_module_as_main(...)` call:
-> 1. Read the `[capture] log → <path>` line from the terminal buffer (it is always the first line of output).
-> 2. Read **that file** with `read_file` or `Get-Content` — it contains the complete, unfragmented output.
+> 1. The `[capture] log → <path>` line is **in the `send_to_terminal` return value right now** —
+>    it is printed to real stdout before the tee redirect, so it appears immediately in the
+>    tool's output on the same turn you sent the command.
+> 2. Extract the path from that return value and call `read_file` on it **immediately** — no
+>    `Start-Sleep`, no polling loop, no shell `Get-Content` command needed.
+> 3. If the operation is still running you will see partial output. That is fine. Re-call
+>    `read_file` on the same path after a short delay to get updated output. Each re-read is
+>    instant and costs nothing.
+> 4. **Never** use `Start-Sleep N ; Get-Content <path>` in a shell command. This blocks the
+>    entire turn for N seconds. Use `read_file` (which returns immediately) and re-read if needed.
 >
 > `get_terminal_output` scrollback is a 32 KB ring buffer shared across all commands in the
 > session. It is truncated, noisy, and may contain output from prior commands.
