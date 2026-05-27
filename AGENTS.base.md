@@ -261,6 +261,11 @@ When a rule needs to be added or changed:
    - Universal rule (all Python repos) → `AGENTS.base.md`
    - Profile-specific rule → `profiles/<name>.md`
 2. **Commit and push** the change in `nielsoln_agent_standards` (push is required — see above).
+   - The agent must **ask the user to approve the push** before proceeding (pushing to a shared
+     remote is a hard-to-reverse action — confirmation is required per safety rules).
+   - Do NOT proceed to step 3 until the push is confirmed complete.
+   - ⚠️ `update_agents.py` fetches from GitHub, NOT local disk. If you run it before pushing,
+     it will silently regenerate `AGENTS.md` from the old remote version, discarding your edits.
 3. In the project repo, run `update_agents.py` to regenerate `AGENTS.md`:
    ```powershell
    & "C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe" update_agents.py
