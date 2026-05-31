@@ -328,7 +328,25 @@ When a rule needs to be added or changed:
 4. Commit the regenerated `AGENTS.md` in the project repo.
 
 This workflow applies even when the change is urgent or small. There are no exceptions.
+### Regenerate AGENTS.md after every change to AGENTS.project.md or AGENTS.project.json
 
+**Any time you modify `AGENTS.project.md` or `AGENTS.project.json` in a project repo, you MUST
+immediately re-run `update_agents.py` and commit the regenerated `AGENTS.md` in the same
+commit.** A stale `AGENTS.md` silently misrepresents the repo's rules to every agent and human
+reader who opens the file.
+
+```powershell
+& "<venv>\Scripts\python.exe" update_agents.py
+git add AGENTS.project.md AGENTS.project.json AGENTS.md   # commit all three together
+git commit -m "Update AGENTS.project.md and regenerate AGENTS.md"
+```
+
+**Never commit a modified `AGENTS.project.md` or `AGENTS.project.json` without a matching
+regenerated `AGENTS.md` in the same commit.** Pre-commit checklist:
+
+- [ ] Ran `update_agents.py` after the last change to either source file
+- [ ] `AGENTS.md` timestamp/content reflects those changes
+- [ ] All three files staged together
 ### Making a repo versholn-compliant (onboarding checklist)
 
 When bringing a new repo into the lunk workspace or making an existing repo
@@ -590,7 +608,16 @@ together), check whether a known-good pattern already exists before writing new 
 
 ## When Unsure
 
-1. **Read `AGENTS.project.md`** — it builds on this base and adds project-specific rules.
+> ⛔ **AGENTS.md — not AGENTS.project.md — is the file you must read.**
+>
+> `AGENTS.md` is the fully assembled, authoritative instruction set for the repo. It includes
+> this base, all active profiles, and the project-specific additions.
+>
+> `AGENTS.project.md` is only a partial input — a hand-written fragment that feeds into the
+> generator. Reading it instead of `AGENTS.md` means you are working from an **incomplete and
+> potentially misleading subset** of the rules. Do not do this. There is no exception.
+
+1. **Read `AGENTS.md`** — this is the authoritative, fully assembled rule set.
 2. **Read `AGENTS.local.md`** if it exists — it overrides everything.
 3. **Look for existing patterns** in the codebase before inventing new ones.
 4. **Ask before committing** if genuinely uncertain — better to clarify than introduce a silent failure.
