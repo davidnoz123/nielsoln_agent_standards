@@ -6,6 +6,24 @@ this foundation and may add, refine, or override anything here.
 
 ---
 
+## Session Startup — What to Read
+
+When starting work in any lunk project repo:
+
+1. **Read `AGENTS.md`** — this is the complete, authoritative instruction file. It is
+   auto-generated from the base standards plus any project-specific profiles.
+   **Do NOT read `AGENTS.project.md` as your primary instruction source.**
+
+2. **Read `AGENTS.project.md` only when** you need to edit it, understand what is
+   project-specific (vs inherited from base), or the task explicitly involves
+   agent configuration. It contains only the hand-written project overrides — it is
+   incomplete on its own.
+
+3. If `AGENTS.local.md` exists in the repo root, read it after `AGENTS.md`. Its rules take
+   precedence over everything else.
+
+---
+
 ## Purpose
 
 Agent instructions exist to:
@@ -330,10 +348,12 @@ When a rule needs to be added or changed:
 This workflow applies even when the change is urgent or small. There are no exceptions.
 ### Regenerate AGENTS.md after every change to AGENTS.project.md or AGENTS.project.json
 
+> ⚠️ **Mandatory.** Failing to regenerate leaves `AGENTS.md` stale and silently lying to every
+> agent and human reader.
+
 **Any time you modify `AGENTS.project.md` or `AGENTS.project.json` in a project repo, you MUST
 immediately re-run `update_agents.py` and commit the regenerated `AGENTS.md` in the same
-commit.** A stale `AGENTS.md` silently misrepresents the repo's rules to every agent and human
-reader who opens the file.
+commit.**
 
 ```powershell
 & "<venv>\Scripts\python.exe" update_agents.py
