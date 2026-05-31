@@ -71,6 +71,52 @@ A `SyntaxError` or `IndentationError` at module level causes a **completely sile
 process runs in a background window (VBA-spawned, `subprocess.Popen`, Cloud Run). stderr is
 invisible, the process dies before any log call, and the only symptom the user sees is a timeout.
 
+### No absolute paths in source code or documentation
+
+**Never hardcode machine-specific absolute paths in any `.py` file, docstring, comment, or
+Markdown document.** Absolute paths are non-portable, break on every other machine in the
+workspace, and silently corrupt copy-pasted examples.
+
+**Rules:**
+
+1. **`locals.txt` is the only permitted home for absolute paths.** All machine-specific roots
+   (`VERSHOLN_DIR`, `AGENT_STANDARDS_DIR`, `VERSHOLN_REPOS_ROOT`, custom tool paths, etc.) live
+   there and are read at runtime. `locals.txt` is gitignored — it is never committed.
+
+2. **Source code must derive paths at runtime** from `locals.txt`, `__file__`, or other relative
+   anchors — never from a string literal that starts with a drive letter or `/home/`:
+   ```python
+   # WRONG — breaks on every other machine
+   root = r"C:\analytics\projects\git\lunk"
+
+   # RIGHT — read from locals.txt or anchor on __file__
+   root = _read_locals()["VERSHOLN_REPOS_ROOT"]
+   root = Path(__file__).resolve().parent.parent
+   ```
+
+3. **Documentation and docstrings must use placeholders** instead of real paths when illustrating
+   commands:
+   ```
+   # WRONG
+   & "C:\analytics\projects\git\lexi\demos\venv\Scripts\python.exe" myscript.py
+
+   # RIGHT
+   & "<venv>\Scripts\python.exe" myscript.py
+   ```
+   The single documented exception is `AGENTS.base.md` itself, which records the workspace
+   default interpreter path as a known-good reference value — **nowhere else**.
+
+4. **Agents must never write absolute paths into source files or Markdown**, even as a
+   "temporary" measure. If a path is needed, read it from `locals.txt` or ask the user.
+
+5. **Code review / pre-commit check:** scan every edited file for drive-letter patterns
+   (`[A-Z]:\\`) before committing. Flag any match that is not inside `locals.txt` or
+   `locals.txt.example` as a violation.
+
+**Why:** A file containing `C:\analytics\...` is broken for any colleague, any CI runner, and any
+future machine re-image. It also leaks filesystem layout. There is no valid reason to embed a
+machine-specific path in committed code or docs.
+
 ### Module-level imports: stdlib only
 
 Only stdlib imports at module level. No exceptions — not `versholn`, not packages from
