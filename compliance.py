@@ -84,6 +84,55 @@ class RepoReport:
 
 
 # ---------------------------------------------------------------------------
+# ████████████████████████████████████████████████████████████████████████
+# COMPLIANCE SCOPE  —  THREE HARD RULES
+# ████████████████████████████████████████████████████████████████████████
+#
+# Rule 1 — MUST BE A GIT REPO
+#   Only directories with a .git/ subdirectory are considered.
+#   Non-repo items in lunk/ (zips, key files, scratch folders) are silently
+#   excluded.  Do not override this.
+#
+# Rule 2 — MUST HAVE AGENTS.project.md IN THE REPO ROOT
+#   AGENTS.project.md is the definitive onboarding signal for the lunk
+#   agent-standards system.  A repo without it has NOT been onboarded.
+#   Such repos are NEVER scanned, NEVER reported on, and NEVER modified
+#   — even if they have path violations or other issues.
+#   Use --all to bypass this gate (for discovery only, not for fixing).
+#
+# Rule 3 — PATH CHECK USES GIT-TRACKED FILES ONLY
+#   check_no_hardcoded_paths calls _py_files() which runs
+#   `git ls-files -- "*.py"` to enumerate Python files.  Untracked files
+#   (scratch scripts, generated outputs, vendored code) are invisible to
+#   compliance and must never be flagged or fixed.
+#
+# ████████████████████████████████████████████████████████████████████████
+
+
+def _valid_compliance_targets(lunk_root: Path) -> list:
+    """Return sorted list of onboarded repo paths under lunk_root.
+
+    A repo is a valid compliance target if and only if ALL three conditions
+    are met:
+
+      1. It is a directory directly under lunk_root.
+      2. It contains a .git/ subdirectory (is an initialised git repo).
+      3. It contains AGENTS.project.md at its root (has been onboarded into
+         the lunk agent-standards system).
+
+    Third-party repos, partially-initialised repos, and non-repo directories
+    are excluded entirely.  The compliance agent must NEVER modify files in
+    a repo that does not appear in this list.
+    """
+    return sorted(
+        p for p in lunk_root.iterdir()
+        if p.is_dir()
+        and (p / ".git").exists()
+        and (p / "AGENTS.project.md").exists()
+    )
+
+
+# ---------------------------------------------------------------------------
 # Individual checks
 # Each check function takes a Path (repo root) and returns a CheckResult.
 # The docstring of this module + the why/fix fields ARE the onboarding docs.
@@ -637,11 +686,227 @@ def check_github_visibility(repo: Path, github_token: str) -> CheckResult:
             "code, commit history, and branch names to anyone on the internet."
         ),
         fix=(
-            f"Go to https://github.com/{owner}/{repo_name}/settings \u2192 "
-            "'Danger Zone' \u2192 'Change repository visibility' \u2192 Private.\n"
+            f"Go to https://github.com/{owner}/{repo_name}/settings -> "
+            "'Danger Zone' -> 'Change repository visibility' -> Private.\n"
             "Or if this repo is intentionally public (e.g. open-source), ignore this warning."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Linting checks
+# ---------------------------------------------------------------------------
+
+_DRIVE_LETTER_RE = re.compile(r"[A-Z]:\\")
+
+
+def _py_files(repo: Path):
+    """Yield git-tracked .py files in *repo* (uses git ls-files).
+
+    Only tracked files are checked — vendored code, downloaded submodules,
+    and untracked scratch files are intentionally excluded.
+    Falls back to a simple rglob (minus .git / venv dirs) if git is unavailable.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--", "*.py"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            for rel in result.stdout.splitlines():
+                f = repo / rel
+                if f.exists():
+                    yield f
+            return
+    except Exception:
+        pass
+
+    # Fallback when git is unavailable
+    _skip = frozenset({".git", "__pycache__", "venv", ".venv", "node_modules"})
+    for f in repo.rglob("*.py"):
+        if not any(part in _skip for part in f.parts):
+            yield f
+
+
+def check_py_syntax(repo: Path) -> CheckResult:
+    """All .py files must parse without syntax errors (py_compile)."""
+    import py_compile
+    import warnings
+
+    errors = []
+    for f in _py_files(repo):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                py_compile.compile(str(f), doraise=True)
+        except py_compile.PyCompileError as e:
+            errors.append(f"{f.relative_to(repo)}: {e.msg}")
+
+    passed = not errors
+    detail = f" ({len(errors)} file(s) with errors)" if errors else ""
+    return CheckResult(
+        name=f"Python syntax (py_compile){detail}",
+        passed=passed,
+        why=(
+            "AGENTS.base.md requires syntax-checking every edited .py file. A SyntaxError "
+            "at module level causes a completely silent crash when the process runs in a "
+            "background window (VBA-spawned, subprocess.Popen, Cloud Run) — stderr is "
+            "invisible and the process dies before any log call."
+        ),
+        fix=(
+            "Fix the syntax errors in the listed files:\n  "
+            + "\n  ".join(errors[:5])
+            + ("\n  ... (and more)" if len(errors) > 5 else "")
+        ) if errors else "",
+    )
+
+
+def _path_ignore_patterns(repo: Path):
+    """Return compiled ignore regexes from AGENTS.project.json 'path_check_ignore' list."""
+    import json as _json
+    config_path = repo / "AGENTS.project.json"
+    if not config_path.exists():
+        return []
+    try:
+        config = _json.loads(config_path.read_text(encoding="utf-8"))
+        raw = config.get("path_check_ignore", [])
+        return [re.compile(p) for p in raw if isinstance(p, str)]
+    except Exception:
+        return []
+
+
+def check_no_hardcoded_paths(repo: Path) -> CheckResult:
+    """No .py files may contain hardcoded drive-letter paths (e.g. C:\\)."""
+    ignore = _path_ignore_patterns(repo)
+    violations = []  # "relative/path.py:lineno"
+    for f in _py_files(repo):
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        for i, line in enumerate(lines, 1):
+            if _DRIVE_LETTER_RE.search(line):
+                if any(p.search(line) for p in ignore):
+                    continue
+                violations.append(f"{f.relative_to(repo)}:{i}")
+
+    passed = not violations
+    detail = f" ({len(violations)} occurrence(s))" if violations else ""
+    return CheckResult(
+        name=f"No hardcoded absolute paths{detail}",
+        passed=passed,
+        why=(
+            "AGENTS.base.md forbids hardcoded machine-specific paths in any .py file. "
+            "They are non-portable, break on every other machine, and silently corrupt "
+            "copy-pasted examples. Scan every edited file for [A-Z]:\\ before committing."
+        ),
+        fix=(
+            "Replace hardcoded paths with locals.txt variables or __file__-relative "
+            "anchors. Occurrences found:\n  "
+            + "\n  ".join(violations[:10])
+            + ("\n  ... (and more)" if len(violations) > 10 else "")
+        ) if violations else "",
+    )
+
+
+def check_linter_configured(repo: Path) -> CheckResult:
+    """Repo should have a linter configured (ruff, flake8, or similar). Advisory."""
+    ruff_in_pyproject = False
+    pyproject = repo / "pyproject.toml"
+    if pyproject.exists():
+        content = pyproject.read_text(encoding="utf-8", errors="replace")
+        if "[tool.ruff]" in content:
+            ruff_in_pyproject = True
+
+    has_config = (
+        ruff_in_pyproject
+        or (repo / "ruff.toml").exists()
+        or (repo / ".ruff.toml").exists()
+        or (repo / ".flake8").exists()
+    )
+    if not has_config:
+        setup_cfg = repo / "setup.cfg"
+        if setup_cfg.exists():
+            content = setup_cfg.read_text(encoding="utf-8", errors="replace")
+            if "[flake8]" in content:
+                has_config = True
+
+    detail = "ruff/flake8 config found" if has_config else "no config found"
+    return CheckResult(
+        name=f"linter configured ({detail})",
+        passed=has_config,
+        warning=True,
+        why=(
+            "A linter configuration ensures consistent code quality and makes it "
+            "easier for agents to know which style rules apply to the repo."
+        ),
+        fix=(
+            "Add a ruff configuration. Minimal pyproject.toml example:\n"
+            "  [tool.ruff]\n"
+            "  line-length = 100\n"
+            "  [tool.ruff.lint]\n"
+            "  select = [\"E\", \"F\", \"W\"]\n"
+            "Or create a ruff.toml in the repo root."
+        ),
+    )
+
+
+def check_ruff_clean(repo: Path) -> CheckResult:
+    """Run ruff if available and report violations as a warning."""
+    import shutil
+    import subprocess
+
+    ruff_exe = shutil.which("ruff")
+    if not ruff_exe:
+        return CheckResult(
+            name="ruff (not on PATH — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+
+    try:
+        result = subprocess.run(
+            [ruff_exe, "check", str(repo), "--output-format", "concise"],
+            capture_output=True, text=True, timeout=60,
+        )
+        # returncode 0 = clean, 1 = violations, 2+ = internal error
+        if result.returncode >= 2:
+            return CheckResult(
+                name="ruff (error running — skipped)",
+                passed=True, warning=True, why="", fix="",
+            )
+        violation_lines = [
+            ln for ln in result.stdout.splitlines()
+            if ln.strip() and not ln.startswith("Found") and not ln.startswith("All checks")
+        ]
+        passed = result.returncode == 0
+        count = len(violation_lines)
+        return CheckResult(
+            name=f"ruff ({count} violation(s))" if not passed else "ruff (clean)",
+            passed=passed,
+            warning=True,
+            why=(
+                "Ruff violations indicate code style or correctness issues. "
+                "Keeping the repo ruff-clean makes agent edits more predictable."
+            ),
+            fix=(
+                f"Run: ruff check . --fix  (auto-fixes many issues)\n"
+                "Remaining violations:\n  "
+                + "\n  ".join(violation_lines[:10])
+                + ("\n  ... (and more)" if count > 10 else "")
+            ) if not passed else "",
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(
+            name="ruff (timed out — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
+    except Exception:
+        return CheckResult(
+            name="ruff (failed to run — skipped)",
+            passed=True, warning=True, why="", fix="",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +939,11 @@ ALL_CHECKS = [
     check_on_latest_branch,
     check_stale_branch_modification_risk,
     check_github_visibility,
+    # Linting
+    check_py_syntax,
+    check_no_hardcoded_paths,
+    check_linter_configured,
+    check_ruff_clean,
 ]
 
 
@@ -820,6 +1090,10 @@ def main():
         "--verbose", "-v", action="store_true",
         help="Show why/fix for passing checks too"
     )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Scan every git repo in the root, including non-onboarded ones (discovery only — do not fix)"
+    )
     args = parser.parse_args()
 
     standards_dir = Path(__file__).parent
@@ -845,11 +1119,17 @@ def main():
             for p in missing:
                 print(f"ERROR: repo not found: {p}", file=sys.stderr)
             sys.exit(1)
-    else:
+    elif args.all:
+        # Raw scan — every git dir, including non-onboarded repos.
+        # FOR DISCOVERY ONLY.  Do not use compliance output from --all
+        # as a fix list; only repos with AGENTS.project.md are valid targets.
         targets = sorted(
             p for p in lunk_root.iterdir()
             if p.is_dir() and (p / ".git").exists()
         )
+    else:
+        # DEFAULT: onboarded repos only (Rules 1 + 2 from the compliance scope).
+        targets = _valid_compliance_targets(lunk_root)
 
     github_token = locals_data.get("GITHUB_TOKEN", "")
     current_standards_sha = _get_standards_sha(standards_dir)

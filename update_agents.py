@@ -265,6 +265,7 @@ def main(argv=None):
     # Parse arguments
     output_path = None
     dry_run = False
+    cli_standards_dir = None
     i = 0
     while i < len(argv):
         if argv[i] == "--dry-run":
@@ -273,9 +274,12 @@ def main(argv=None):
         elif argv[i] in ("--output", "-o") and i + 1 < len(argv):
             output_path = argv[i + 1]
             i += 2
+        elif argv[i] == "--standards-dir" and i + 1 < len(argv):
+            cli_standards_dir = argv[i + 1]
+            i += 2
         else:
             print(f"ERROR: Unknown argument: {argv[i]}", file=sys.stderr)
-            print("Usage: python update_agents.py [--dry-run] [--output PATH]", file=sys.stderr)
+            print("Usage: python update_agents.py [--dry-run] [--output PATH] [--standards-dir PATH]", file=sys.stderr)
             return 1
 
     repo_root = _find_repo_root()
@@ -289,10 +293,14 @@ def main(argv=None):
     print(f"Profiles   : {profiles}")
 
     # Try to get the local standards repo SHA for the metadata footer
-    locals_data = _read_locals(repo_root)
-    standards_dir = locals_data.get("AGENT_STANDARDS_DIR", "")
-    if standards_dir and not os.path.isabs(standards_dir):
-        standards_dir = os.path.normpath(os.path.join(repo_root, standards_dir))
+    # Priority: --standards-dir CLI arg > locals.txt > env var AGENT_STANDARDS_DIR
+    if cli_standards_dir:
+        standards_dir = os.path.abspath(cli_standards_dir)
+    else:
+        locals_data = _read_locals(repo_root)
+        standards_dir = locals_data.get("AGENT_STANDARDS_DIR") or os.environ.get("AGENT_STANDARDS_DIR", "")
+        if standards_dir and not os.path.isabs(standards_dir):
+            standards_dir = os.path.normpath(os.path.join(repo_root, standards_dir))
     standards_sha = _get_standards_sha(standards_dir)
 
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
