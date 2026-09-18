@@ -617,6 +617,64 @@ together), check whether a known-good pattern already exists before writing new 
 
 ---
 
+## Prose Style
+
+These are the user's prose rules, not house style for code comments. They apply to
+anything carrying his name and to everything an agent drafts on his behalf: emails,
+commit messages, Markdown deliverables, chat replies, task prompts, feedback
+requests. **Apply them silently while drafting** rather than asking each time.
+
+### 1. No em-dashes
+
+Replace each with the punctuation actually doing the work: a colon where the second
+half defines the first, a comma where it is parenthetical, a full stop where it is an
+independent clause.
+
+- **Author the replacements one at a time.** A blind substitution produces bad prose.
+- **This is measured, not a matter of taste.** In one project's CRM style corpus, 2 of
+  28 human-authored samples contained `" - "`. Of 28 agent drafts of the same
+  paragraphs, 13 did. Agent prose reaches for the dash roughly six times more often
+  than the user ever does, which makes it the most-rewritten feature of anything an
+  agent drafts.
+- ⚠️ **Sequencing trap:** where prose is also being reflowed, reflow **first**, then
+  replace dashes. The other way round, anchors spanning wrapped lines miss silently
+  and the output looks plausible instead of failing loudly.
+- A project may declare a narrow exception for a required title format. Where it does,
+  that file contains **exactly one** em-dash and everything else contains **zero**.
+
+### 2. No serial (Oxford) comma
+
+No comma before the final `and` in a list:
+
+- ✅ `a reading per service, a decision per service and a per-service threshold`
+- ❌ `a reading per service, a decision per service, and a per-service threshold`
+
+The reasoning is consistency: a two-item list is `A and B` with no comma, so adding one
+only once the list reaches three is arbitrary.
+
+**It does not apply to a comma joining two independent clauses.** `the job does not
+raise, and nothing is reported` is correct, because that is not a list. A regex for this
+rule is mostly false positives for exactly that reason, so check candidates by eye
+rather than bulk-replacing.
+
+### 3. One sentence per line
+
+Markdown rejoins them for the reader, so nothing renders differently, but diffs become
+per-sentence. That is how the user reviews prose, so the line breaks are for the diff,
+not for the page.
+
+### Enforcement
+
+A project may provide a checker and require it. Where it does, that requirement is not
+advisory: these rules are not reliably applied by hand, which is why the tool exists.
+See the project's own `AGENTS.project.md`.
+
+> The standards documents themselves predate these rules and still contain em-dashes.
+> Apply them to new and edited prose. Do not bulk-rewrite the existing files: a blind
+> substitution across them is precisely what rule 1 warns against.
+
+---
+
 ## Documentation Standards
 
 - Explain *why* a non-obvious design choice was made — not what the code does.
