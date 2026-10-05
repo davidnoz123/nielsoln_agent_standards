@@ -528,6 +528,54 @@ The version string is: **`<major>.<minor>.<patch>`**
 3. Don't combine unrelated changes in a single commit.
 4. Don't push automatically after committing — let the user decide when to push.
 
+### Never merge a worktree's branch from inside that worktree
+
+> ⚠️ **The failure is a SUCCESS message**, which is the whole reason this is a
+> rule and not a note.
+
+`git merge <branch>` run from the worktree that has `<branch>` checked out is a
+**no-op that reports success**. It prints `Already up to date.` and exits 0,
+because the branch already is where you are standing. Nothing is merged. A
+command chained with `&&` therefore carries on: the cleanup runs, the push
+runs and the whole sequence reads as having worked while the change never
+reached the release branch at all.
+
+Two more things then go wrong, in order:
+
+| | |
+|---|---|
+| `git worktree remove <path>` | fails with `Permission denied`, because the shell's working directory is inside the path being removed |
+| `rm -rf <path>` on the directory you are standing in | destroys the shell's own cwd, and every later command fails with `Unable to read current working directory` |
+
+**Measured**: three times in one day in `slate_tools`, on three separate
+changes. The first two cost a retry. The third broke the shell mid-command,
+after the merge had silently not happened.
+
+**The rule.** Do the work in the worktree. Do the MERGE from the main
+worktree, never from the branch's own:
+
+```powershell
+# in the worktree: commit only
+git add -A ; if ($?) { git commit -m "..." }
+
+# then from the MAIN checkout
+Set-Location <main repo>
+git merge --no-ff <branch>
+git worktree remove <path>
+git branch -d <branch>
+```
+
+**And verify it, because `Already up to date.` is not an error.** A merge that
+did nothing leaves the commit unreachable from the release branch:
+
+```powershell
+git merge-base --is-ancestor <commit> 0.1
+if ($?) { "merged" } else { "NOT MERGED, and nothing said so" }
+```
+
+The habit forms because the worktree is where the work was done and the `cd` is
+already behind you. Nothing in git's output argues with it.
+
 ### Multi-repo sibling structure
 
 Several projects depend on sibling repos cloned into the same parent directory:
